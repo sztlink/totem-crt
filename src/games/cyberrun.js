@@ -1,0 +1,682 @@
+/**
+ * CYBER RUN — Nível 1 do Totem CRT
+ * 
+ * Platformer side-scrolling cyberpunk.
+ * Criado por Minhoso. Adaptado pro Totem pelo szt.link.
+ * 
+ * MUDANÇAS DO ORIGINAL:
+ * - Canvas 640×480 (4:3) em vez de 640×280
+ * - Sem vidas / sem game over — morte = respawn, timer continua
+ * - Timer é do orquestrador, não do jogo
+ * - Sem menu/overlay — orquestrador cuida
+ * - Input via objeto unificado (teclado + gamepad)
+ * - Implementa interface MiniGame
+ * 
+ * MINHOSO: edite este arquivo livremente. Respeite a interface
+ * (init, update, render, getState, renderIdle, reset, destroy).
+ * O orquestrador chama essas funções — não mude os nomes.
+ */
+
+// ============================================================
+// CONSTANTES
+// ============================================================
+const W = 640, H = 480;
+const GROUND = 380;       // era 200 no original (canvas 280). Ajustado pra 480.
+const GRAVITY = 0.55;
+const PSPEED = 3.2;
+const JUMP_VEL = -12.5;
+const LEVEL_LEN = 3400;
+
+// ============================================================
+// ESTADO DO JOGO (encapsulado no módulo)
+// ============================================================
+let input = null;       // referência ao objeto de input do orquestrador
+let canvas = null;
+let ctx = null;
+let state = 'idle';     // 'idle' | 'playing' | 'won'
+let score = 0;
+let particles = [];
+let powerupActive = null, powerupTimer = 0, powerupDuration = 0;
+let shakeTimer = 0;
+let level, player, cam;
+
+// Cenário (gerado uma vez)
+const stars = Array.from({ length: 60 }, () => ({
+  x: Math.random() * W,
+  y: Math.random() * (GROUND - 40),
+  r: Math.random() < 0.3 ? 2 : 1,
+  twinkle: Math.random() * Math.PI * 2
+}));
+const bldFar = Array.from({ length: 18 }, (_, i) => ({
+  x: i * 190 + Math.random() * 80,
+  w: 30 + Math.random() * 60,
+  h: 40 + Math.random() * 70,
+  windows: Math.random() < 0.7
+}));
+const bldMid = Array.from({ length: 14 }, (_, i) => ({
+  x: i * 240 + Math.random() * 100,
+  w: 25 + Math.random() * 45,
+  h: 60 + Math.random() * 90,
+  lit: Math.floor(Math.random() * 4)
+}));
+
+// Power-up metadata
+const PW = {
+  speed:  { col: '#ff0', col2: '#f80', name: 'SPEED', hue: '#ff0' },
+  shield: { col: '#0ff', col2: '#08f', name: 'SHIELD', hue: '#0ff' },
+  star:   { col: '#f0f', col2: '#80f', name: 'STAR', hue: '#f0f' },
+};
+
+// ============================================================
+// LEVEL DATA
+// ============================================================
+function makeLevelData() {
+  return {
+    blocks: [
+      { x: 320, h: 28 }, { x: 470, h: 44 }, { x: 620, h: 32 }, { x: 790, h: 52 }, { x: 920, h: 28 },
+      { x: 1070, h: 40 }, { x: 1200, h: 56 }, { x: 1340, h: 28 }, { x: 1470, h: 44 }, { x: 1600, h: 28 },
+      { x: 1720, h: 52 }, { x: 1850, h: 36 }, { x: 1980, h: 60 }, { x: 2100, h: 28 }, { x: 2220, h: 44 },
+      { x: 2350, h: 32 }, { x: 2480, h: 56 }, { x: 2600, h: 28 }, { x: 2720, h: 48 }, { x: 2860, h: 36 },
+      { x: 2980, h: 52 }, { x: 3100, h: 28 }, { x: 3200, h: 44 },
+    ],
+    gaps: [
+      { x: 400, w: 58 }, { x: 710, w: 66 }, { x: 1010, w: 60 }, { x: 1270, w: 72 }, { x: 1530, w: 68 },
+      { x: 1800, w: 74 }, { x: 2060, w: 78 }, { x: 2300, w: 70 }, { x: 2540, w: 80 },
+      { x: 2780, w: 72 }, { x: 3050, w: 82 }, { x: 3160, w: 65 },
+    ],
+    platforms: [
+      { x: 500, y: GROUND - 100, w: 60 }, { x: 900, y: GROUND - 120, w: 50 },
+      { x: 1300, y: GROUND - 110, w: 55 }, { x: 1700, y: GROUND - 130, w: 60 },
+      { x: 2200, y: GROUND - 100, w: 50 }, { x: 2700, y: GROUND - 120, w: 55 },
+    ],
+    coins: [
+      { x: 330, y: GROUND - 62, c: false }, { x: 480, y: GROUND - 74, c: false }, { x: 630, y: GROUND - 62, c: false },
+      { x: 800, y: GROUND - 82, c: false }, { x: 930, y: GROUND - 60, c: false }, { x: 1080, y: GROUND - 70, c: false },
+      { x: 1210, y: GROUND - 86, c: false }, { x: 1350, y: GROUND - 60, c: false }, { x: 1480, y: GROUND - 74, c: false },
+      { x: 1610, y: GROUND - 60, c: false }, { x: 1730, y: GROUND - 82, c: false }, { x: 1860, y: GROUND - 66, c: false },
+      { x: 1990, y: GROUND - 90, c: false }, { x: 2110, y: GROUND - 60, c: false }, { x: 2230, y: GROUND - 74, c: false },
+      { x: 2360, y: GROUND - 62, c: false }, { x: 2490, y: GROUND - 90, c: false }, { x: 2610, y: GROUND - 60, c: false },
+      { x: 2730, y: GROUND - 82, c: false }, { x: 2870, y: GROUND - 66, c: false },
+    ],
+    powerups: [
+      { x: 550, y: GROUND - 80, type: 'speed', c: false }, { x: 1000, y: GROUND - 85, type: 'shield', c: false },
+      { x: 1450, y: GROUND - 80, type: 'star', c: false }, { x: 1950, y: GROUND - 85, type: 'speed', c: false },
+      { x: 2450, y: GROUND - 80, type: 'shield', c: false }, { x: 2900, y: GROUND - 85, type: 'star', c: false },
+      { x: 3150, y: GROUND - 80, type: 'speed', c: false },
+    ],
+    enemies: [
+      { x: 580, y: GROUND - 22, vy: 0, vx: -1.2, w: 20, h: 20, dir: -1, type: 'walker', alive: true, anim: 0 },
+      { x: 860, y: GROUND - 22, vy: 0, vx: -1.0, w: 20, h: 20, dir: -1, type: 'walker', alive: true, anim: 0 },
+      { x: 1100, y: GROUND - 22, vy: 0, vx: 0, w: 20, h: 20, dir: 1, type: 'jumper', alive: true, anim: 0, jumpTimer: 55 },
+      { x: 1380, y: GROUND - 22, vy: 0, vx: -1.6, w: 20, h: 20, dir: -1, type: 'walker', alive: true, anim: 0 },
+      { x: 1560, y: GROUND - 22, vy: 0, vx: -1.2, w: 20, h: 20, dir: -1, type: 'walker', alive: true, anim: 0 },
+      { x: 1740, y: GROUND - 22, vy: 0, vx: 0, w: 20, h: 20, dir: 1, type: 'jumper', alive: true, anim: 0, jumpTimer: 48 },
+      { x: 1920, y: GROUND - 22, vy: 0, vx: -1.8, w: 20, h: 20, dir: -1, type: 'walker', alive: true, anim: 0 },
+      { x: 2080, y: GROUND - 22, vy: 0, vx: -1.4, w: 20, h: 20, dir: -1, type: 'walker', alive: true, anim: 0 },
+      { x: 2260, y: GROUND - 22, vy: 0, vx: 0, w: 20, h: 20, dir: 1, type: 'jumper', alive: true, anim: 0, jumpTimer: 42 },
+      { x: 2440, y: GROUND - 22, vy: 0, vx: -2.0, w: 20, h: 20, dir: -1, type: 'walker', alive: true, anim: 0 },
+      { x: 2660, y: GROUND - 22, vy: 0, vx: 0, w: 20, h: 20, dir: 1, type: 'jumper', alive: true, anim: 0, jumpTimer: 38 },
+      { x: 2820, y: GROUND - 22, vy: 0, vx: -1.8, w: 20, h: 20, dir: -1, type: 'walker', alive: true, anim: 0 },
+      { x: 3000, y: GROUND - 22, vy: 0, vx: -2.2, w: 20, h: 20, dir: -1, type: 'walker', alive: true, anim: 0 },
+      { x: 3180, y: GROUND - 22, vy: 0, vx: 0, w: 20, h: 20, dir: 1, type: 'jumper', alive: true, anim: 0, jumpTimer: 35 },
+    ],
+    FLAG_X: LEVEL_LEN - 120,
+  };
+}
+
+// ============================================================
+// HELPERS
+// ============================================================
+function getGroundY(x, w) {
+  for (const g of level.gaps) if (x + w - 2 > g.x && x + 2 < g.x + g.w) return null;
+  return GROUND;
+}
+
+function rectHit(a, b) { return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
+function getBlockRect(b) { return { x: b.x, y: GROUND - b.h, w: 24, h: b.h }; }
+
+function spawn(x, y, col, n, sz) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = 1 + Math.random() * 5;
+    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 2, life: 40, maxLife: 40, col, size: sz || 4 });
+  }
+}
+
+function respawn() {
+  player.x = Math.max(cam.x + 60, 80);
+  player.y = GROUND - 32;
+  player.vy = 0;
+  player.vx = 0;
+  player.onGround = true;
+  player.hurt = 90;
+  powerupActive = null;
+  powerupTimer = 0;
+  shakeTimer = 20;
+  spawn(player.x, player.y, '#f00', 12, 5);
+}
+
+// ============================================================
+// DRAWING
+// ============================================================
+function drawBG() {
+  ctx.fillStyle = '#050518'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#080830'; ctx.fillRect(0, 120, W, GROUND - 120);
+  ctx.fillStyle = '#0a0a2a'; ctx.fillRect(0, GROUND - 20, W, 20);
+
+  const t = performance.now();
+
+  // Stars
+  stars.forEach(s => {
+    const sx = ((s.x - cam.x * 0.08 + W * 20) % (W + 4));
+    const tw = 0.6 + 0.4 * Math.sin(t * 0.002 + s.twinkle);
+    ctx.globalAlpha = tw;
+    ctx.fillStyle = s.r > 1 ? '#8af' : '#fff';
+    ctx.fillRect(sx, s.y, s.r, s.r);
+  });
+  ctx.globalAlpha = 1;
+
+  // Far buildings
+  const camF = cam.x * 0.18;
+  bldFar.forEach(b => {
+    const bx = ((b.x - camF % 2400 + 2400) % 2400) - 60;
+    if (bx > W + 60) return;
+    ctx.fillStyle = '#0a1a2a'; ctx.fillRect(bx, GROUND - b.h - 2, b.w, b.h + 2);
+    ctx.fillStyle = '#0ff'; ctx.fillRect(bx + Math.floor(b.w / 2), GROUND - b.h - 10, 1, 10);
+    ctx.fillRect(bx + Math.floor(b.w / 2) - 1, GROUND - b.h - 6, 3, 2);
+    if (b.windows) {
+      ctx.fillStyle = '#0ff'; ctx.globalAlpha = 0.25;
+      for (let wy = GROUND - b.h + 4; wy < GROUND - 4; wy += 9)
+        for (let wx = bx + 4; wx < bx + b.w - 4; wx += 8)
+          if (Math.sin(wx * 7 + wy * 13) > 0.2) ctx.fillRect(wx, wy, 3, 5);
+      ctx.globalAlpha = 1;
+    }
+  });
+
+  // Mid buildings
+  const camM = cam.x * 0.32;
+  bldMid.forEach(b => {
+    const bx = ((b.x - camM % 3200 + 3200) % 3200) - 80;
+    if (bx > W + 80) return;
+    ctx.fillStyle = '#0d0820'; ctx.fillRect(bx, GROUND - b.h, b.w, b.h);
+    const nc = ['#f0f', '#0ff', '#ff0', '#f80'][b.lit];
+    ctx.fillStyle = nc; ctx.globalAlpha = 0.9;
+    ctx.fillRect(bx, GROUND - b.h, b.w, 2); ctx.fillRect(bx, GROUND - b.h, 2, b.h);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = nc; ctx.globalAlpha = 0.3;
+    for (let wy = GROUND - b.h + 6; wy < GROUND - 6; wy += 10)
+      for (let wx = bx + 4; wx < bx + b.w - 4; wx += 9)
+        if (Math.cos(wx * 11 + wy * 7 + b.lit * 3) > 0.1) ctx.fillRect(wx, wy, 4, 5);
+    ctx.globalAlpha = 1;
+  });
+
+  // Neon ground grid
+  ctx.fillStyle = '#0ff'; ctx.globalAlpha = 0.15;
+  const gOff = -((cam.x | 0) % 40);
+  for (let gx = gOff; gx < W; gx += 40) ctx.fillRect(gx, GROUND, 1, H - GROUND);
+  for (let gy = GROUND; gy < H; gy += 20) ctx.fillRect(0, gy, W, 1);
+  ctx.globalAlpha = 1;
+}
+
+function drawGround() {
+  ctx.fillStyle = '#0a0820'; ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.fillStyle = '#0ff'; ctx.globalAlpha = 0.6; ctx.fillRect(0, GROUND, W, 2); ctx.globalAlpha = 1;
+  const off = -((cam.x | 0) % 32);
+  ctx.fillStyle = '#0ff'; ctx.globalAlpha = 0.08;
+  for (let tx = off; tx < W; tx += 32) ctx.fillRect(tx, GROUND, 1, H - GROUND);
+  ctx.globalAlpha = 1;
+
+  for (const g of level.gaps) {
+    const gx = Math.round(g.x - cam.x);
+    if (gx > W || gx + g.w < 0) continue;
+    ctx.fillStyle = '#000'; ctx.fillRect(gx, GROUND - 1, g.w, H - GROUND + 2);
+    ctx.fillStyle = '#050510'; ctx.fillRect(gx + 2, GROUND + 4, g.w - 4, H);
+    ctx.fillStyle = '#f0f'; ctx.globalAlpha = 0.8;
+    ctx.fillRect(gx, GROUND - 2, 2, H); ctx.fillRect(gx + g.w - 2, GROUND - 2, 2, H);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawBlocks() {
+  for (const b of level.blocks) {
+    const bx = Math.round(b.x - cam.x);
+    if (bx > W || bx + 24 < 0) continue;
+    const bh = b.h, by = GROUND - bh, bw = 24;
+    ctx.fillStyle = '#150830'; ctx.fillRect(bx + 2, by + 2, bw, bh);
+    ctx.fillStyle = '#1e0f44'; ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = '#f0f'; ctx.fillRect(bx, by, bw, 2); ctx.fillRect(bx, by, 2, bh);
+    ctx.fillStyle = '#0ff'; ctx.fillRect(bx, by + bh - 2, bw, 2); ctx.fillRect(bx + bw - 2, by, 2, bh);
+    ctx.fillStyle = '#f0f'; ctx.globalAlpha = 0.15;
+    for (let gy = by; gy < by + bh; gy += 8) ctx.fillRect(bx, gy, bw, 1);
+    for (let gx = bx; gx < bx + bw; gx += 8) ctx.fillRect(gx, by, 1, bh);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawPowerups() {
+  const t = performance.now();
+  for (const pw of level.powerups) {
+    if (pw.c) continue;
+    const px = Math.round(pw.x - cam.x), py = Math.round(pw.y);
+    if (px < -20 || px > W + 20) continue;
+    const p = PW[pw.type];
+    const bob = Math.sin(t * 0.003 + pw.x) * 5;
+    const ry = py + bob;
+    ctx.fillStyle = p.col; ctx.globalAlpha = 0.12 + 0.08 * Math.sin(t * 0.006);
+    ctx.fillRect(px - 6, ry - 6, 28, 28); ctx.globalAlpha = 1;
+    ctx.fillStyle = p.col2; ctx.fillRect(px + 1, ry + 1, 16, 16);
+    ctx.fillStyle = p.col; ctx.fillRect(px, ry, 16, 16);
+    ctx.fillStyle = '#fff'; ctx.globalAlpha = 0.25; ctx.fillRect(px + 2, ry + 2, 12, 12); ctx.globalAlpha = 1;
+    ctx.font = '8px "Press Start 2P",monospace';
+    ctx.fillStyle = '#000';
+    ctx.fillText(pw.type === 'speed' ? 'S' : pw.type === 'shield' ? 'O' : '*', px + 3, ry + 12);
+  }
+}
+
+function drawCoins() {
+  const t = performance.now();
+  for (const c of level.coins) {
+    if (c.c) continue;
+    const cx = Math.round(c.x - cam.x), cy = Math.round(c.y);
+    if (cx < -16 || cx > W + 16) continue;
+    const a = Math.floor(t / 120) % 4, cw = [8, 6, 4, 6][a], ox = 4 - Math.floor(cw / 2);
+    ctx.fillStyle = '#806000'; ctx.fillRect(cx + ox + 1, cy + 1, cw, 10);
+    ctx.fillStyle = '#ffd700'; ctx.fillRect(cx + ox, cy, cw, 10);
+    if (cw > 4) { ctx.fillStyle = '#fff'; ctx.fillRect(cx + ox + 1, cy + 1, 2, 3); }
+    ctx.fillStyle = '#0ff'; ctx.globalAlpha = 0.15; ctx.fillRect(cx + ox, cy, cw, 10); ctx.globalAlpha = 1;
+  }
+}
+
+function drawEnemy(e) {
+  if (!e.alive) return;
+  const ex = Math.round(e.x - cam.x), ey = Math.round(e.y);
+  if (ex < -30 || ex > W + 30) return;
+  const isW = e.type === 'walker';
+  ctx.fillStyle = isW ? '#004030' : '#400040'; ctx.fillRect(ex + 2, ey + 2, e.w, e.h);
+  ctx.fillStyle = isW ? '#00ee88' : '#ee00ee'; ctx.fillRect(ex, ey, e.w, e.h);
+  ctx.fillStyle = isW ? '#0ff' : '#f0f';
+  ctx.fillRect(ex, ey, e.w, 2); ctx.fillRect(ex, ey, 2, e.h);
+  const vx = e.dir > 0 ? ex + e.w - 8 : ex + 2;
+  ctx.fillStyle = '#000'; ctx.fillRect(vx, ey + 5, 6, 5);
+  ctx.fillStyle = '#f00'; ctx.fillRect(vx + 1, ey + 6, 4, 3);
+  ctx.fillStyle = '#ff8'; ctx.fillRect(vx + 2, ey + 6, 2, 2);
+  const fa = Math.floor(e.anim / 8) % 2;
+  ctx.fillStyle = isW ? '#006644' : '#660066';
+  if (fa === 0) { ctx.fillRect(ex + 3, ey + e.h, 5, 4); ctx.fillRect(ex + e.w - 8, ey + e.h, 5, 4); }
+  else { ctx.fillRect(ex + 2, ey + e.h - 2, 5, 6); ctx.fillRect(ex + e.w - 7, ey + e.h, 5, 4); }
+  if (!isW) {
+    ctx.fillStyle = '#f0f'; ctx.fillRect(ex + 4, ey - 7, 3, 7); ctx.fillRect(ex + e.w - 7, ey - 7, 3, 7);
+    ctx.fillStyle = '#ff0'; ctx.fillRect(ex + 3, ey - 8, 5, 2); ctx.fillRect(ex + e.w - 8, ey - 8, 5, 2);
+  }
+  if (powerupActive === 'star') {
+    ctx.fillStyle = '#f0f'; ctx.globalAlpha = 0.3; ctx.fillRect(ex - 2, ey - 2, e.w + 4, e.h + 4); ctx.globalAlpha = 1;
+  }
+}
+
+function drawPlayer() {
+  const p = player;
+  const px = Math.round(p.x - cam.x), py = Math.round(p.y);
+  if (p.hurt > 0 && powerupActive !== 'shield') ctx.globalAlpha = 0.3 + 0.7 * Math.abs(Math.sin(p.hurt * 0.4));
+
+  // Shield aura
+  if (powerupActive === 'shield') {
+    ctx.fillStyle = '#0ff'; ctx.globalAlpha = 0.18 + 0.12 * Math.sin(performance.now() * 0.008);
+    ctx.fillRect(px - 5, py - 5, p.w + 10, p.h + 10); ctx.globalAlpha = 1;
+    ctx.fillStyle = '#0ff'; ctx.globalAlpha = 0.5;
+    ctx.fillRect(px - 5, py - 5, p.w + 10, 2); ctx.fillRect(px - 5, py + p.h + 3, p.w + 10, 2);
+    ctx.fillRect(px - 5, py - 5, 2, p.h + 10); ctx.fillRect(px + p.w + 3, py - 5, 2, p.h + 10);
+    ctx.globalAlpha = 1;
+  }
+  if (powerupActive === 'star') {
+    ctx.fillStyle = '#f0f'; ctx.globalAlpha = 0.25; ctx.fillRect(px - 3, py - 3, p.w + 6, p.h + 6); ctx.globalAlpha = 1;
+  }
+
+  const la = p.onGround ? Math.floor(p.anim / 5) % 2 : 0;
+  const speed = powerupActive === 'speed';
+
+  // Legs
+  ctx.fillStyle = speed ? '#ff8000' : '#3050f0';
+  if (la === 0) { ctx.fillRect(px + 2, py + 20, 6, 8); ctx.fillRect(px + 10, py + 20, 6, 8); }
+  else { ctx.fillRect(px + 1, py + 18, 6, 10); ctx.fillRect(px + 11, py + 22, 6, 6); }
+
+  // Speed trail
+  if (speed && p.vx !== 0) {
+    ctx.fillStyle = '#ff8000'; ctx.globalAlpha = 0.3;
+    const tx = p.vx > 0 ? px - 8 : px + 8;
+    ctx.fillRect(tx, py + 4, 8, 20); ctx.globalAlpha = 0.15; ctx.fillRect(tx - 6, py + 6, 6, 16); ctx.globalAlpha = 1;
+  }
+
+  // Body
+  ctx.fillStyle = '#c07010'; ctx.fillRect(px + 1, py + 9, 16, 13);
+  ctx.fillStyle = '#f0b030'; ctx.fillRect(px, py + 8, 16, 12);
+  ctx.fillStyle = '#0ff'; ctx.globalAlpha = 0.6; ctx.fillRect(px + 4, py + 11, 8, 1); ctx.fillRect(px + 4, py + 15, 8, 1); ctx.globalAlpha = 1;
+
+  // Arms
+  ctx.fillStyle = '#f0b030';
+  if (la === 0) { ctx.fillRect(px - 3, py + 10, 4, 8); ctx.fillRect(px + 17, py + 10, 4, 8); }
+  else { ctx.fillRect(px - 3, py + 12, 4, 6); ctx.fillRect(px + 17, py + 8, 4, 10); }
+
+  // Head
+  ctx.fillStyle = '#c07010'; ctx.fillRect(px + 2, py + 1, 14, 9);
+  ctx.fillStyle = '#f0b030'; ctx.fillRect(px + 1, py, 14, 9);
+
+  // Visor
+  ctx.fillStyle = '#000'; ctx.fillRect(px + 3, py + 2, 10, 4);
+  ctx.fillStyle = powerupActive === 'shield' ? '#0ff' : powerupActive === 'star' ? '#f0f' : powerupActive === 'speed' ? '#ff0' : '#0af';
+  ctx.fillRect(px + 4, py + 3, 8, 2);
+  ctx.fillStyle = '#fff'; ctx.globalAlpha = 0.5; ctx.fillRect(px + 4, py + 3, 3, 1); ctx.globalAlpha = 1;
+
+  // Hat
+  ctx.fillStyle = '#080818'; ctx.fillRect(px + 2, py - 5, 12, 6); ctx.fillRect(px, py - 1, 16, 3);
+  ctx.fillStyle = '#0ff'; ctx.fillRect(px + 2, py - 1, 12, 1);
+
+  ctx.globalAlpha = 1;
+}
+
+function drawShip(t) {
+  const fx = Math.round(level.FLAG_X - cam.x);
+  if (fx > W + 80 || fx < -80) return;
+  const bob = Math.sin(t * 0.002) * 5;
+  const sy = GROUND - 90 + bob;
+
+  // Glow
+  ctx.fillStyle = '#0ff'; ctx.globalAlpha = 0.08 + 0.06 * Math.sin(t * 0.004);
+  ctx.fillRect(fx - 30, sy - 10, 100, 120); ctx.globalAlpha = 1;
+
+  // Flames
+  const fl = 8 + Math.sin(t * 0.01) * 4;
+  ctx.fillStyle = '#f80'; ctx.fillRect(fx + 12, sy + 70, 8, fl | 0);
+  ctx.fillStyle = '#ff0'; ctx.fillRect(fx + 14, sy + 70, 4, (fl * 0.6) | 0);
+  ctx.fillStyle = '#f08'; ctx.fillRect(fx + 22, sy + 72, 6, (fl * 0.8) | 0);
+  ctx.fillStyle = '#ff0'; ctx.fillRect(fx + 24, sy + 72, 3, (fl * 0.5) | 0);
+
+  // Hull
+  ctx.fillStyle = '#0a1030'; ctx.fillRect(fx + 4, sy + 4, 40, 70);
+  ctx.fillStyle = '#1a2050'; ctx.fillRect(fx, sy, 40, 70);
+  ctx.fillStyle = '#0ff'; ctx.globalAlpha = 0.7;
+  ctx.fillRect(fx, sy, 40, 2); ctx.fillRect(fx, sy, 2, 70);
+  ctx.fillRect(fx + 38, sy, 2, 70); ctx.fillRect(fx, sy + 68, 40, 2);
+  ctx.globalAlpha = 0.3;
+  ctx.fillRect(fx + 8, sy + 10, 24, 2); ctx.fillRect(fx + 8, sy + 20, 24, 2); ctx.fillRect(fx + 8, sy + 40, 24, 2);
+  ctx.globalAlpha = 1;
+
+  // Cockpit
+  ctx.fillStyle = '#000'; ctx.fillRect(fx + 8, sy + 5, 24, 22);
+  ctx.fillStyle = '#0af'; ctx.globalAlpha = 0.7; ctx.fillRect(fx + 9, sy + 6, 22, 20);
+  ctx.fillStyle = '#fff'; ctx.globalAlpha = 0.4; ctx.fillRect(fx + 10, sy + 7, 8, 6); ctx.globalAlpha = 1;
+
+  // Wings
+  ctx.fillStyle = '#0a1030'; ctx.fillRect(fx - 14, sy + 36, 16, 28);
+  ctx.fillStyle = '#1a2050'; ctx.fillRect(fx - 12, sy + 34, 16, 28);
+  ctx.fillStyle = '#0ff'; ctx.globalAlpha = 0.6; ctx.fillRect(fx - 12, sy + 34, 16, 2); ctx.fillRect(fx - 12, sy + 34, 2, 28); ctx.globalAlpha = 1;
+  ctx.fillStyle = '#0a1030'; ctx.fillRect(fx + 38, sy + 36, 16, 28);
+  ctx.fillStyle = '#1a2050'; ctx.fillRect(fx + 36, sy + 34, 16, 28);
+  ctx.fillStyle = '#0ff'; ctx.globalAlpha = 0.6; ctx.fillRect(fx + 36, sy + 34, 16, 2); ctx.fillRect(fx + 50, sy + 34, 2, 28); ctx.globalAlpha = 1;
+
+  // Lights
+  const bl = Math.sin(t * 0.005) > 0;
+  ctx.fillStyle = bl ? '#f00' : '#400'; ctx.fillRect(fx - 14, sy + 38, 4, 4);
+  ctx.fillStyle = bl ? '#0f0' : '#040'; ctx.fillRect(fx + 50, sy + 38, 4, 4);
+
+  // Label
+  ctx.fillStyle = '#0ff'; ctx.font = '5px "Press Start 2P",monospace'; ctx.textAlign = 'center';
+  ctx.fillText('BOARDING', fx + 20, sy - 8); ctx.textAlign = 'left';
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    ctx.globalAlpha = p.life / p.maxLife;
+    ctx.fillStyle = p.col;
+    ctx.fillRect(Math.round(p.x - cam.x), Math.round(p.y), p.size, p.size);
+  });
+  ctx.globalAlpha = 1;
+}
+
+function drawPowerupBar() {
+  if (!powerupActive) return;
+  const barX = 50, barY = H - 30, barW = 200, barH = 8;
+  const pct = powerupTimer / powerupDuration;
+  const p = PW[powerupActive];
+
+  ctx.fillStyle = '#111'; ctx.fillRect(barX, barY, barW, barH);
+  ctx.fillStyle = p.col; ctx.fillRect(barX, barY, barW * pct, barH);
+  ctx.fillStyle = '#fff'; ctx.font = '6px "Press Start 2P",monospace';
+  ctx.fillText(p.name, barX, barY - 4);
+}
+
+function drawScanlines() {
+  ctx.fillStyle = '#000'; ctx.globalAlpha = 0.04;
+  for (let y = 0; y < H; y += 2) ctx.fillRect(0, y, W, 1);
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================
+// UPDATE
+// ============================================================
+function updateGame() {
+  if (state !== 'playing') return;
+  const p = player;
+  if (p.won) return;
+
+  const spd = powerupActive === 'speed' ? PSPEED * 1.8 : PSPEED;
+
+  // Input → movement
+  if (input.right) p.vx = Math.min(p.vx + 0.6, spd);
+  else if (input.left) p.vx = Math.max(p.vx - 0.6, -spd);
+  else p.vx *= 0.72;
+  if (Math.abs(p.vx) < 0.1) p.vx = 0;
+
+  // Jump (buttonA or up)
+  if ((input.up || input.buttonA) && !p.jumpUsed && p.onGround) {
+    p.vy = JUMP_VEL; p.onGround = false; p.jumpUsed = true;
+  }
+  if (!(input.up || input.buttonA)) p.jumpUsed = false;
+
+  // Physics
+  p.vy += GRAVITY; p.x += p.vx; p.y += p.vy;
+  if (p.x < 0) p.x = 0;
+  if (p.x > LEVEL_LEN - p.w) p.x = LEVEL_LEN - p.w;
+
+  // Block collision
+  p.onGround = false;
+  for (const b of level.blocks) {
+    const br = getBlockRect(b);
+    if (!rectHit({ x: p.x, y: p.y, w: p.w, h: p.h }, br)) continue;
+    const prev = { x: p.x - p.vx, y: p.y - p.vy, w: p.w, h: p.h };
+    if (prev.y + prev.h <= br.y + 4 && p.vy >= 0) { p.y = br.y - p.h; p.vy = 0; p.onGround = true; }
+    else if (prev.x + prev.w <= br.x + 2) { p.x = br.x - p.w; p.vx = 0; }
+    else if (prev.x >= br.x + br.w - 2) { p.x = br.x + br.w; p.vx = 0; }
+    else { p.y = br.y - p.h; p.vy = 0; p.onGround = true; }
+  }
+
+  // Ground collision
+  const gY = getGroundY(p.x + 2, p.w - 4);
+  if (gY !== null && p.y + p.h >= gY) { p.y = gY - p.h; p.vy = 0; p.onGround = true; }
+
+  // Fell in gap → respawn (NO game over, just lose time)
+  if (p.y > H + 60) { respawn(); return; }
+
+  // Camera
+  cam.x += (p.x - 180 - cam.x) * 0.12;
+  if (cam.x < 0) cam.x = 0;
+
+  // Animation
+  if (p.onGround) p.anim++;
+  if (p.hurt > 0) p.hurt--;
+  if (shakeTimer > 0) shakeTimer--;
+
+  // Powerup timer
+  if (powerupActive) { powerupTimer--; if (powerupTimer <= 0) { powerupActive = null; powerupTimer = 0; } }
+
+  // Coin collection
+  for (const c of level.coins) {
+    if (c.c) continue;
+    if (Math.abs(p.x - c.x) < 22 && Math.abs(p.y - c.y) < 22) { c.c = true; score += 50; spawn(c.x, c.y, '#ffd700', 5, 3); }
+  }
+
+  // Powerup collection
+  for (const pw of level.powerups) {
+    if (pw.c) continue;
+    if (Math.abs(p.x - pw.x) < 22 && Math.abs(p.y - pw.y) < 28) {
+      pw.c = true; powerupActive = pw.type;
+      powerupDuration = pw.type === 'star' ? 300 : pw.type === 'shield' ? 400 : 350;
+      powerupTimer = powerupDuration; score += 100;
+      spawn(pw.x, pw.y, PW[pw.type].col, 10, 5);
+    }
+  }
+
+  // Enemy logic
+  for (const e of level.enemies) {
+    if (!e.alive) continue;
+    e.anim++;
+    if (e.type === 'walker') {
+      e.x += e.vx; let rev = false;
+      const ah = e.dir > 0 ? e.x + e.w + 4 : e.x - 4;
+      for (const g of level.gaps) if (ah > g.x - 2 && ah < g.x + g.w + 2) { rev = true; break; }
+      if (e.x < 20 || e.x > LEVEL_LEN - 40) rev = true;
+      if (rev) { e.vx *= -1; e.dir *= -1; }
+    } else {
+      e.vy += GRAVITY; e.y += e.vy;
+      if (e.y >= GROUND - e.h) { e.y = GROUND - e.h; e.vy = 0; e.jumpTimer--; }
+      if (e.jumpTimer <= 0) { e.vy = -10; e.jumpTimer = 38 + Math.random() * 28; }
+      if (p.x > e.x + 2) e.x += 0.6; else if (p.x < e.x - 2) e.x -= 0.6;
+    }
+
+    // Star kills nearby enemies
+    if (powerupActive === 'star') {
+      if (Math.abs(p.x - e.x) < 120 && e.alive) { e.alive = false; score += 200; spawn(e.x, e.y, '#f0f', 8, 4); }
+      continue;
+    }
+
+    // Player-enemy collision
+    const er = { x: e.x, y: e.y, w: e.w, h: e.h };
+    const pr = { x: p.x + 2, y: p.y + 2, w: p.w - 4, h: p.h - 4 };
+    if (rectHit(pr, er)) {
+      if (p.vy > 0 && p.y + p.h < e.y + e.h * 0.6) {
+        // Stomp
+        e.alive = false; score += 200; p.vy = -9; spawn(e.x, e.y, '#0ff', 8, 4);
+      } else if (powerupActive === 'shield') {
+        e.alive = false; score += 150; spawn(e.x, e.y, '#0ff', 6, 4);
+      } else if (p.hurt === 0) {
+        // Hit → respawn (NO game over)
+        respawn(); return;
+      }
+    }
+  }
+
+  // Particles
+  particles.forEach(pt => { pt.x += pt.vx; pt.y += pt.vy; pt.vy += 0.15; pt.life--; });
+  particles = particles.filter(pt => pt.life > 0);
+
+  // Reached the ship → WON
+  if (p.x >= level.FLAG_X + 5 && p.x <= level.FLAG_X + 50 && !p.won) {
+    p.won = true;
+    score += 800;
+    spawn(p.x, p.y, '#0ff', 20, 5);
+    spawn(p.x, p.y, '#f0f', 15, 4);
+    state = 'won';
+  }
+}
+
+// ============================================================
+// MINIGAME INTERFACE (export)
+// ============================================================
+const cyberrun = {
+  id: 'cyberrun',
+  name: 'CYBER RUN',
+  difficulty: 1,
+
+  init(canvasEl, inputRef) {
+    canvas = canvasEl;
+    ctx = canvas.getContext('2d');
+    input = inputRef;
+    this.reset();
+  },
+
+  update(dt) {
+    updateGame();
+  },
+
+  render(renderCtx) {
+    // Se passaram um ctx diferente, usar esse (compositor pode redirecionar)
+    const c = renderCtx || ctx;
+    const prevCtx = ctx;
+    ctx = c;
+
+    c.save();
+    if (shakeTimer > 0) {
+      const s = shakeTimer > 10 ? 3 : 1;
+      c.translate((Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
+    }
+    c.clearRect(-10, -10, W + 20, H + 20);
+
+    const t = performance.now();
+    drawBG();
+    drawGround();
+    drawShip(t);
+    drawBlocks();
+    drawCoins();
+    drawPowerups();
+    level.enemies.forEach(drawEnemy);
+    drawParticles();
+    drawPlayer();
+    drawPowerupBar();
+    drawScanlines();
+
+    c.restore();
+    ctx = prevCtx;
+  },
+
+  getState() {
+    return state; // 'idle' | 'playing' | 'won'
+  },
+
+  renderIdle(renderCtx) {
+    // Attract mode: cenário passando automaticamente sem jogador
+    const c = renderCtx || ctx;
+    const prevCtx = ctx;
+    ctx = c;
+
+    const t = performance.now();
+    cam = cam || { x: 0 };
+    cam.x = (t * 0.03) % (LEVEL_LEN - W); // scroll automático lento
+
+    c.clearRect(0, 0, W, H);
+    drawBG();
+    drawGround();
+    drawBlocks();
+    drawScanlines();
+
+    // "PRESS START" piscante
+    if (Math.floor(t / 500) % 2 === 0) {
+      c.fillStyle = '#0ff';
+      c.font = '12px "Press Start 2P",monospace';
+      c.textAlign = 'center';
+      c.fillText('PRESS START', W / 2, H / 2);
+      c.textAlign = 'left';
+    }
+
+    ctx = prevCtx;
+  },
+
+  reset() {
+    level = makeLevelData();
+    player = { x: 80, y: GROUND - 32, vy: 0, vx: 0, onGround: true, w: 18, h: 28, anim: 0, hurt: 0, dead: false, won: false, jumpUsed: false };
+    cam = { x: 0 };
+    score = 0;
+    particles = [];
+    powerupActive = null;
+    powerupTimer = 0;
+    powerupDuration = 0;
+    shakeTimer = 0;
+    state = 'playing';
+  },
+
+  destroy() {
+    // Cleanup se necessário
+    canvas = null;
+    ctx = null;
+    input = null;
+  }
+};
+
+export default cyberrun;

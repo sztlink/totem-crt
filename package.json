@@ -1,0 +1,14 @@
+{
+  "name": "totem-crt",
+  "version": "0.1.0",
+  "description": "Totem CRT — Player 1, Farol Santander",
+  "main": "src/main.js",
+  "scripts": {
+    "dev": "npx serve . -p 3000",
+    "start": "electron .",
+    "calibrate": "electron . --calibrate"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0"
+  }
+}
