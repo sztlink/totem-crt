@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "cyberrun",
+      "runtimeExecutable": "powershell.exe",
+      "runtimeArgs": ["-ExecutionPolicy", "Bypass", "-NoProfile", "-File", "C:\\Users\\AYA\\cyberrun\\serve.ps1"],
+      "port": 3000,
+      "autoPort": true
+    }
+  ]
+}

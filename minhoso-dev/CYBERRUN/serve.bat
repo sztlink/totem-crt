@@ -1,0 +1,3 @@
+@echo off
+cd /d C:\Users\AYA\cyberrun
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$l=New-Object Net.HttpListener;$l.Prefixes.Add('http://localhost:3000/');$l.Start();Write-Host 'Server ready at http://localhost:3000';while($l.IsListening){$ctx=$l.GetContext();$p=$ctx.Request.Url.LocalPath;if($p -eq '/'){{$p='/index.html'}};try{$b=[IO.File]::ReadAllBytes('C:\Users\AYA\cyberrun'+$p);$ctx.Response.ContentType=if($p -match '.mp3'){'audio/mpeg'}elseif($p -match '.png'){'image/png'}else{'text/html'};$ctx.Response.OutputStream.Write($b,0,$b.Length)}catch{$ctx.Response.StatusCode=404};$ctx.Response.Close()}"
