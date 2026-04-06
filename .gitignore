@@ -4,10 +4,10 @@ Thumbs.db
 *.log
 diag.html
 test.html
-games/
-src/games/cyberrun-engine.js
+/src/games/
+/games/
 ranking.json
-src/games/cyberrun_extracted_raw.js
+app/src/games/cyberrun_extracted_raw.js
 scripts/build_cyberrun.py
 test_cyberrun.html
 servir.bat
