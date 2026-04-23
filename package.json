@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node server.js 3000",
     "dev:py": "python -m http.server 3000 --directory app",
+    "test:luta": "npx --yes http-server app -p 8765 -c-1 --cors",
     "start": "electron .",
     "calibrate": "electron . --calibrate"
   },

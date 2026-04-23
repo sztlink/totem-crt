@@ -10,6 +10,7 @@ const state = {
   down: false,
   buttonA: false,
   buttonB: false,
+  buttonX: false,
   start: false,
 };
 
@@ -44,9 +45,10 @@ function readGamepad() {
     state.right = !!dR;
   }
 
-  // Botões (layout padrão: A=0, B=1, Start=9)
+  // Botões (layout padrão Xbox: A=0, B=1, X=2, Y=3, Start=9)
   state.buttonA = gp.buttons[0]?.pressed || false;
   state.buttonB = gp.buttons[1]?.pressed || false;
+  state.buttonX = gp.buttons[2]?.pressed || false;
   state.start = gp.buttons[9]?.pressed || false;
 }
 
@@ -74,8 +76,9 @@ function readKeyboard() {
   if (keysDown['ArrowUp']) state.up = true;
   if (keysDown['ArrowDown']) state.down = true;
   if (keysDown['Space']) state.buttonA = true;
-  // Boost: X + C + Shift esquerdo (menos conflito com setas no mesmo matriz do teclado)
-  if (keysDown['KeyX'] || keysDown['KeyC'] || keysDown['ShiftLeft']) state.buttonB = true;
+  // X só no buttonX (especial na luta). Soco: C + Shift (teclado)
+  if (keysDown['KeyX']) state.buttonX = true;
+  if (keysDown['KeyC'] || keysDown['ShiftLeft'] || keysDown['KeyZ']) state.buttonB = true;
   if (keysDown['Enter']) state.start = true;
 }
 
@@ -87,6 +90,7 @@ export function poll() {
   state.down = false;
   state.buttonA = false;
   state.buttonB = false;
+  state.buttonX = false;
   state.start = false;
 
   readGamepad();

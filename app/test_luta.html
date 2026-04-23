@@ -2,79 +2,80 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FIGHT / LUTA — Teste isolado (Totem CRT)</title>
+<title>LUTA — Teste Isolado</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body {
-  background: #0a0a12;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 100vh;
-  font-family: "Press Start 2P", monospace, monospace;
-}
-canvas {
-  border: 2px solid #f0f;
-  display: block;
-  image-rendering: pixelated;
-  background: #050510;
-}
-#info {
-  color: #8af;
-  font-size: 9px;
-  margin-top: 12px;
-  text-align: center;
-  line-height: 1.8;
-  max-width: 640px;
-}
-#info strong { color: #f0f; }
-#state { color: #ff0; font-size: 10px; margin-top: 8px; }
+body { background: #111; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: monospace; }
+canvas { border: 2px solid #f0f; display: block; image-rendering: pixelated; }
+#info { color: #f0f; font-size: 11px; margin-top: 8px; text-align: center; line-height: 1.6; }
+#state { color: #ff0; font-size: 10px; margin-top: 4px; }
 </style>
-<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 </head>
 <body>
+<div id="file-warning" style="display:none;max-width:640px;margin:0 auto 12px;padding:12px;background:#422;color:#fff;border:2px solid #f80;font-size:13px;line-height:1.5;text-align:left;">
+  <strong>Este HTML não funciona abrindo o arquivo direto</strong> (duplo clique): o navegador bloqueia <code>import</code> em <code>file://</code>.<br><br>
+  No terminal, na pasta <code>player1-rush</code>, rode:<br>
+  <code style="background:#111;padding:4px 8px;display:inline-block;margin-top:8px;">npm run test:luta</code><br>
+  Depois abra: <a href="http://127.0.0.1:8765/test_luta.html" style="color:#8ff;">http://127.0.0.1:8765/test_luta.html</a>
+</div>
 <canvas id="c" width="640" height="480"></canvas>
 <div id="info">
-  <strong>Teste só FIGHT (LUTA)</strong> — não carrega orquestrador nem as outras TVs.<br>
-  Edita <code>src/games/luta.js</code> e recarrega. Integração final continua em <code>app/index.html</code>.<br>
-  ← → mover · ↑ ou <strong>Espaço</strong> saltar · ↓ ou <strong>X</strong> atacar · <strong>Enter</strong> reiniciar ronda
+  ← → mover &nbsp;|&nbsp; ↑ / Space pular &nbsp;|&nbsp; ↓ / Z atacar &nbsp;|&nbsp; X SUPER (barra cheia) &nbsp;|&nbsp; → → DASH &nbsp;|&nbsp; ← ← + Z PODER &nbsp;|&nbsp; ← → + Z BURST &nbsp;|&nbsp; Enter reiniciar
 </div>
-<div id="state"></div>
+<div id="state">state: idle</div>
 
+<script>
+(function () {
+  if (location.protocol === 'file:') {
+    var w = document.getElementById('file-warning');
+    if (w) w.style.display = 'block';
+  }
+})();
+</script>
 <script type="module">
 import luta from './src/games/luta.js';
-import { poll, getState } from './src/input.js';
 
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const stateEl = document.getElementById('state');
 
-luta.init(canvas, getState());
-luta.reset();
+const inp = { left: false, right: false, up: false, down: false, buttonA: false, buttonB: false, buttonX: false, start: false };
 
 document.addEventListener('keydown', e => {
-  if (e.code === 'Enter') {
-    e.preventDefault();
-    luta.reset();
-    last = performance.now();
-  }
+  if (e.code === 'ArrowLeft')  inp.left = true;
+  if (e.code === 'ArrowRight') inp.right = true;
+  if (e.code === 'ArrowUp')    { inp.up = true; inp.buttonA = true; }
+  if (e.code === 'Space')      { inp.up = true; inp.buttonA = true; e.preventDefault(); }
+  if (e.code === 'ArrowDown')  { inp.down = true; inp.buttonB = true; }
+  if (e.code === 'KeyZ')       { inp.down = true; inp.buttonB = true; }
+  if (e.code === 'KeyX')      { inp.buttonX = true; }
+  if (e.code === 'Enter')      { luta.reset(); }
+  if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code)) e.preventDefault();
 });
 
-let last = performance.now();
+document.addEventListener('keyup', e => {
+  if (e.code === 'ArrowLeft')  inp.left = false;
+  if (e.code === 'ArrowRight') inp.right = false;
+  if (e.code === 'ArrowUp')    { inp.up = false; inp.buttonA = false; }
+  if (e.code === 'Space')      { inp.up = false; inp.buttonA = false; }
+  if (e.code === 'ArrowDown')  { inp.down = false; inp.buttonB = false; }
+  if (e.code === 'KeyZ')       { inp.down = false; inp.buttonB = false; }
+  if (e.code === 'KeyX')      { inp.buttonX = false; }
+});
+
+luta.init(canvas, inp);
+
+let lastTime = 0;
+const FRAME_TIME = 1000 / 60;
 
 function loop(now) {
-  poll();
-  const dt = Math.min(now - last, 50);
-  last = now;
-
-  luta.update(dt);
-  luta.render(ctx);
-
-  stateEl.textContent = 'getState(): ' + luta.getState() + '  |  Enter = reiniciar ronda';
-
   requestAnimationFrame(loop);
+  if (now - lastTime < FRAME_TIME) return;
+  lastTime = now - ((now - lastTime) % FRAME_TIME);
+
+  luta.update(16.67);
+  luta.render(ctx);
+  stateEl.textContent = 'state: ' + luta.getState() + '  |  Enter = restart';
 }
 requestAnimationFrame(loop);
 </script>
