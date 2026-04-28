@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FIGHT / LUTA — Standalone</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #111; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: monospace; }
+canvas { border: 2px solid #f0f; display: block; image-rendering: pixelated; }
+#info { color: #f0f; font-size: 11px; margin-top: 8px; text-align: center; line-height: 1.6; max-width: 720px; }
+#state { color: #ff0; font-size: 10px; margin-top: 4px; }
+#file-warning { display:none;max-width:720px;margin:0 auto 12px;padding:12px;background:#422;color:#fff;border:2px solid #f80;font-size:13px;line-height:1.5;text-align:left; }
+</style>
+</head>
+<body>
+<div id="file-warning">
+  <strong>Este HTML não funciona por file://</strong> (duplo clique): o navegador bloqueia <code>import</code> em ficheiros locais.<br><br>
+  Na pasta <code>app</code>, rode <code>npm run dev</code> e abra <code>http://localhost:3000/luta.html</code>.
+</div>
+<canvas id="c" width="640" height="480"></canvas>
+<div id="info">
+  ← → mover | ↑ / Space pular | Z atacar | ↓ + Z ONDA GLITCH | X SUPER (barra cheia) | → → DASH | ← ← + Z PODER | ← → + Z BURST | Enter reiniciar
+</div>
+<div id="state">state: idle</div>
+
+<script>
+if (location.protocol === 'file:') {
+  const w = document.getElementById('file-warning');
+  if (w) w.style.display = 'block';
+}
+</script>
+<script type="module">
+import luta from './src/games/luta.js';
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const stateEl = document.getElementById('state');
+const inp = { left: false, right: false, up: false, down: false, buttonA: false, buttonB: false, buttonX: false, start: false };
+
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'ArrowLeft') inp.left = true;
+  if (e.code === 'ArrowRight') inp.right = true;
+  if (e.code === 'ArrowUp') { inp.up = true; inp.buttonA = true; }
+  if (e.code === 'Space') { inp.up = true; inp.buttonA = true; e.preventDefault(); }
+  if (e.code === 'ArrowDown') inp.down = true;
+  if (e.code === 'KeyZ') inp.buttonB = true;
+  if (e.code === 'KeyX') inp.buttonX = true;
+  if (e.code === 'Enter') luta.reset();
+  if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code)) e.preventDefault();
+});
+
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'ArrowLeft') inp.left = false;
+  if (e.code === 'ArrowRight') inp.right = false;
+  if (e.code === 'ArrowUp') { inp.up = false; inp.buttonA = false; }
+  if (e.code === 'Space') { inp.up = false; inp.buttonA = false; }
+  if (e.code === 'ArrowDown') inp.down = false;
+  if (e.code === 'KeyZ') inp.buttonB = false;
+  if (e.code === 'KeyX') inp.buttonX = false;
+});
+
+luta.init(canvas, inp);
+
+let lastTime = 0;
+const FRAME_TIME = 1000 / 60;
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  if (now - lastTime < FRAME_TIME) return;
+  lastTime = now - ((now - lastTime) % FRAME_TIME);
+  luta.update(16.67);
+  luta.render(ctx);
+  stateEl.textContent = 'state: ' + luta.getState() + '  |  Enter = restart';
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

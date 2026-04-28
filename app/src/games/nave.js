@@ -6,12 +6,14 @@
  */
 
 import { PW_SPEED_IMG, PW_SHIELD_IMG, PW_STAR_IMG, PW_SPREAD_IMG, PW_LIFE_IMG } from './nave-powerup-sprites.js';
+import { applyRetroFilter, RETRO_FILTER_PRESETS } from './retro-filter.js';
 
 // ─── ÁUDIO ───────────────────────────────────────────────────
 let _ac = null;
 function ac() { if(!_ac)_ac=new(window.AudioContext||window.webkitAudioContext)();return _ac; }
 
 let _bgMusic=null;
+let _outroCarAudio=null;
 function startBgMusic(){
   try{
     if(_bgMusic){_bgMusic.play().catch(()=>{});return;}
@@ -36,7 +38,7 @@ function fadeBgMusic(targetVol,durationMs){
     _bgMusic.volume=startVol+diff*(step/steps);
   },50);
 }
-function sndCarStart(){
+function sndCarStartSynth(){
   try{
     const a=ac();
     const now=a.currentTime;
@@ -74,6 +76,18 @@ function sndCarStart(){
     n.connect(nf);nf.connect(ng);ng.connect(a.destination);
     n.start(now);n.stop(now+2.3);
   }catch(e){}
+}
+function sndCarStart(){
+  try{
+    if(!_outroCarAudio){
+      _outroCarAudio=new Audio('/assets/drive/Audios/freesound_community-engine-47745.mp3');
+      _outroCarAudio.volume=0.72;
+    }
+    _outroCarAudio.currentTime=0;
+    _outroCarAudio.play().catch(()=>sndCarStartSynth());
+  }catch(e){
+    sndCarStartSynth();
+  }
 }
 function sndShoot() {
   const a=ac(),o=a.createOscillator(),g=a.createGain();
@@ -176,9 +190,11 @@ const ASTEROID_COUNT=5;
 const ASTEROID_SPRITE_VER=1;
 /** Incrementar ao trocar bg_full.png / bg_nebula_01–02.png */
 const BG_PARALLAX_VER=4;
+const ENABLE_16BIT_FILTER=true;
+const FILTER_16BIT_PRESET=RETRO_FILTER_PRESETS.soft16;
 
 // ─── ESTADO ──────────────────────────────────────────────────
-let _ctx, _inputRef, _state='idle';
+let _canvas, _ctx, _inputRef, _state='idle';
 let _score=0, _wave=0, _frame=0;
 let _stars=[], _asteroids=[], _particles=[];
 let _player, _bullets=[], _enemies=[], _ebullets=[], _powerups=[];
@@ -964,7 +980,8 @@ function update(dt){
 
     // Player x boss
     if(_boss&&playerHitsBossCircle()){
-      if(!_playerShield)registerPlayerHit();
+      // Aplica dano por contato apenas fora dos i-frames de dano.
+      if(!_playerShield&&_player.hurtTimer<=0)registerPlayerHit();
     }
   }
 
@@ -1498,33 +1515,95 @@ function drawBossWarning(ctx){
 }
 
 function drawHUD(ctx){
-  ctx.fillStyle='rgba(0,0,10,0.72)';ctx.fillRect(2,2,220,52);
-  ctx.strokeStyle='rgba(0,255,255,0.25)';ctx.lineWidth=1;ctx.strokeRect(2,2,220,52);
+  const t=performance.now()*0.001;
+  const pulse=0.62+0.38*Math.sin(t*3.8);
+  const pulse2=0.5+0.5*Math.sin(t*2.6+1.8);
+  const drawPanel=(x,y,w,h,accentA,accentB,title)=>{
+    ctx.fillStyle='rgba(7,6,18,0.92)';
+    ctx.fillRect(x,y,w,h);
+    ctx.shadowColor=`rgba(${accentA},${0.5+0.3*pulse})`;
+    ctx.shadowBlur=10+6*pulse;
+    ctx.strokeStyle=`rgba(${accentA},${0.65+0.25*pulse})`;
+    ctx.lineWidth=1.4;ctx.strokeRect(x+0.5,y+0.5,w-1,h-1);
+    ctx.shadowColor=`rgba(${accentB},${0.36+0.26*pulse2})`;
+    ctx.shadowBlur=8+5*pulse2;
+    ctx.strokeStyle=`rgba(${accentB},${0.5+0.3*pulse2})`;
+    ctx.strokeRect(x+2.5,y+2.5,w-5,h-5);
+    ctx.shadowBlur=0;
+    ctx.fillStyle=`rgba(${accentA},${0.24+0.16*pulse})`;
+    ctx.fillRect(x+1,y+1,w-2,2);
+    ctx.fillStyle=`rgba(${accentB},${0.18+0.12*pulse2})`;
+    ctx.fillRect(x+1,y+h-3,w-2,2);
+    if(title){
+      ctx.fillStyle='rgba(210,240,255,0.72)';
+      ctx.font='7px "Press Start 2P",monospace';
+      ctx.fillText(title,x+8,y+10);
+    }
+  };
 
-  ctx.fillStyle='#0ff';ctx.font='11px "Press Start 2P",monospace';ctx.fillText('SCORE',10,22);
-  ctx.fillStyle='#ff0';ctx.font='16px "Press Start 2P",monospace';ctx.fillText(String(_score),10,46);
-
-  ctx.fillStyle='#8f8';ctx.font='11px "Press Start 2P",monospace';ctx.fillText('VIDA',120,22);
-  ctx.fillStyle='#fff';ctx.font='16px "Press Start 2P",monospace';ctx.fillText(String(_lives),120,46);
+  const leftPanelX=2,leftPanelY=2,leftPanelW=140,leftPanelH=52;
+  drawPanel(leftPanelX,leftPanelY,leftPanelW,leftPanelH,'34,211,238','244,114,182','SYSTEM');
+  const lifeCx=leftPanelX+leftPanelW/2;
+  ctx.textAlign='center';
+  ctx.fillStyle='rgba(145,255,190,0.92)';
+  ctx.font='9px "Press Start 2P",monospace';
+  ctx.fillText('LIFE',lifeCx,20);
+  ctx.shadowColor='rgba(34,211,238,0.65)';
+  ctx.shadowBlur=10+7*pulse;
+  ctx.fillStyle='rgba(34,211,238,0.35)';
+  ctx.font='18px "Press Start 2P",monospace';
+  ctx.fillText(String(_lives),lifeCx+1.5,43);
+  ctx.shadowColor='rgba(244,114,182,0.55)';
+  ctx.shadowBlur=7+5*pulse2;
+  ctx.fillStyle='rgba(244,114,182,0.42)';
+  ctx.fillText(String(_lives),lifeCx-1.5,43);
+  ctx.shadowColor='rgba(180,255,255,0.88)';
+  ctx.shadowBlur=12+8*pulse2;
+  ctx.fillStyle='#ecfeff';
+  ctx.fillText(String(_lives),lifeCx,43);
+  ctx.shadowBlur=0;
+  ctx.textAlign='left';
 
   const wlabel=_phase==='boss_warning'?'CUIDADO':
                 (_phase==='boss'||_phase==='victory_anim')?(_bossPhase===2?'BOSS ★2':'BOSS'):
                 _phase==='between'?'NEXT...':('WAVE '+_wave+'/'+TOTAL_WAVES);
-  ctx.fillStyle='rgba(0,0,10,0.72)';ctx.fillRect(W-130,2,127,38);
-  ctx.strokeStyle='rgba(255,0,255,0.25)';ctx.lineWidth=1;ctx.strokeRect(W-130,2,127,38);
-  ctx.fillStyle='#f0f';ctx.font='12px "Press Start 2P",monospace';
-  ctx.textAlign='right';ctx.fillText(wlabel,W-10,30);ctx.textAlign='left';
+  const rightPanelX=W-130,rightPanelY=2,rightPanelW=127,rightPanelH=38;
+  drawPanel(rightPanelX,rightPanelY,rightPanelW,rightPanelH,'168,85,247','34,211,238','STATUS');
+  ctx.shadowColor='rgba(220,180,255,0.65)';ctx.shadowBlur=8+6*pulse;
+  ctx.fillStyle='#f5d0fe';ctx.font='11px "Press Start 2P",monospace';
+  ctx.textAlign='center';ctx.fillText(wlabel,rightPanelX+rightPanelW/2,27);ctx.textAlign='left';
+  ctx.shadowBlur=0;
 
   let px=8;
-  ['speed','star','shield','spread'].forEach(t=>{
-    const active=t==='speed'?_playerSpeed:t==='star'?_playerStar:t==='shield'?_playerShield:_playerSpread;
+  ['speed','star','shield','spread'].forEach(type=>{
+    const active=type==='speed'?_playerSpeed:type==='star'?_playerStar:type==='shield'?_playerShield:_playerSpread;
     if(!active)return;
-    ctx.fillStyle=PW_COLS[t];ctx.globalAlpha=0.85;
-    ctx.fillRect(px,H-36,28,28);
-    ctx.strokeStyle='rgba(255,255,255,0.3)';ctx.lineWidth=1;ctx.strokeRect(px,H-36,28,28);
-    ctx.fillStyle=t==='star'||t==='spread'?'#fff':'#000';ctx.globalAlpha=1;
-    ctx.font='12px "Press Start 2P",monospace';ctx.fillText(PW_LABEL[t],px+5,H-15);
-    px+=36;
+    const py=H-46;
+    const glow=0.55+0.45*Math.sin(t*6+px*0.03);
+    ctx.save();
+    ctx.shadowColor=PW_COLS[type];
+    ctx.shadowBlur=12+8*glow;
+    ctx.fillStyle='rgba(8,6,18,0.95)';
+    ctx.fillRect(px,py,36,36);
+    ctx.strokeStyle=`rgba(230,245,255,${0.22+0.2*glow})`;
+    ctx.lineWidth=1.1;ctx.strokeRect(px+0.5,py+0.5,35,35);
+    ctx.strokeStyle=`rgba(120,245,255,${0.35+0.3*glow})`;
+    ctx.lineWidth=1;ctx.strokeRect(px+2.5,py+2.5,31,31);
+    ctx.fillStyle=PW_COLS[type];
+    ctx.globalAlpha=0.12+0.14*glow;
+    ctx.fillRect(px+3,py+3,30,30);
+    ctx.fillStyle=`rgba(120,245,255,${0.2+0.2*glow})`;
+    ctx.fillRect(px+3,py+3,30,1.5);
+    ctx.fillStyle=`rgba(244,114,182,${0.14+0.16*glow})`;
+    ctx.fillRect(px+3,py+31.5,30,1.5);
+    ctx.globalAlpha=1;
+    ctx.fillStyle='#eefcff';
+    ctx.font='12px "Press Start 2P",monospace';
+    ctx.textAlign='center';
+    ctx.fillText(PW_LABEL[type],px+18,py+23);
+    ctx.textAlign='left';
+    ctx.restore();
+    px+=42;
   });
 }
 
@@ -1947,6 +2026,11 @@ function drawOutroCutscene(ctx){
   ctx.textAlign='left';
 }
 
+function renderRetro16BitFilter(ctx){
+  if(!ENABLE_16BIT_FILTER||!_canvas)return;
+  applyRetroFilter(ctx,_canvas,W,H,performance.now(),FILTER_16BIT_PRESET);
+}
+
 // ─── INTERFACE MINIGAME ───────────────────────────────────────
 const nave = {
   id: 'nave',
@@ -1954,6 +2038,7 @@ const nave = {
   difficulty: 2,
 
   init(canvasEl, inputRef) {
+    _canvas   = canvasEl;
     _ctx      = canvasEl.getContext('2d');
     _inputRef = inputRef;
     loadPlayerShipSprite();
@@ -1988,6 +2073,7 @@ const nave = {
     if(_phase==='boss_transition') drawBossTransition(ctx);
     if(_phase==='outro') drawOutroCutscene(ctx);
     if(_paused) drawPauseOverlay(ctx);
+    renderRetro16BitFilter(ctx);
   },
 
   getState() { return _state; },
@@ -2061,6 +2147,7 @@ const nave = {
     ctx.shadowBlur=0;ctx.globalAlpha=1;
     ctx.textAlign='left';
     ctx.restore();
+    renderRetro16BitFilter(ctx);
   },
 
   reset() {

@@ -18,21 +18,45 @@ const COMBO_WINDOW = 20;
 const DASH_SPEED = 14;
 const DASH_DURATION = 12;
 const DASH_COOLDOWN = 30;
+const DASH_STRIKE_SPEED = 17;
+const DASH_STRIKE_DURATION = 14;
+const DASH_STRIKE_DAMAGE = 18;
+const DASH_STRIKE_COOLDOWN = 90;
 const BURST_DAMAGE = 12;
 const BURST_KNOCKBACK = 14;
 const BURST_COOLDOWN = 120;
 const BURST_RADIUS = 100;
+const CYBER_JUMP_COOLDOWN = 65;
+const CYBER_JUMP_TRAIL_DURATION = 56;
+const CYBER_JUMP_TRAIL_INTERVAL = 2;
+const CYBER_JUMP_BOLT_DAMAGE = 8;
+const CYBER_GROUND_SURGE_SPEED = 9.5;
+const CYBER_GROUND_SURGE_DAMAGE = 18;
 
 const P1_ATTACK_DAMAGE = 8;
 const P1_SPECIAL_DAMAGE = 20;
 const P1_HP = 100;
+const P1_NEON_PRIMARY = 'rgb(0, 255, 180)'; // Cyber mint neon
+const P1_NEON_SECONDARY = 'rgb(0, 190, 255)'; // Electric cyan-blue
 
 const P2_ATTACK_DAMAGE = 10;
 const P2_HP = 180;
 const P2_RANGED_DAMAGE = 8;
+const P2_NEON_PRIMARY = '#ff4dd9';   // rosa neon
+const P2_NEON_SECONDARY = '#9a3dff'; // roxo neon
+
+const IDLE_LOGO_SRC = 'assets/fight/logo_luta.png';
+let idleLogoImage = null;
+function ensureIdleLogoLoaded() {
+  if (!idleLogoImage) {
+    idleLogoImage = new Image();
+    idleLogoImage.src = IDLE_LOGO_SRC;
+  }
+  return idleLogoImage;
+}
 
 // Estado global do jogo
-let state = 'idle'; // 'idle' | 'playing' | 'pre_phase2' | 'phase_transition' | 'dying' | 'won' | 'lost'
+let state = 'idle'; // 'idle' | 'playing' | 'pre_phase2' | 'phase_transition' | 'phase2_intro' | 'dying' | 'won' | 'lost'
 let _canvas = null;
 let _inputRef = null;
 
@@ -47,6 +71,7 @@ let aiStrafeDir = 1;
 let aiStrafeTimer = 0;
 let aiRangedTimer = 0;
 let aiMeleeCommitTimer = 0;
+let aiP2DashCooldown = 0;
 let prevButtonB = false;
 
 // Audio context
@@ -60,6 +85,8 @@ let timerFrame = 0;
 let projectiles = [];
 let energyFields = [];
 let groundWaves = [];
+let cyberJumpBolts = [];
+let cyberGroundSurges = [];
 let bossTraps = [];
 let bossTrapTimer = 0;
 let bossPowers = [];
@@ -69,7 +96,9 @@ let bossPowerTimer = 0;
 const P1_MAX_LIVES = 5;
 let p1Lives = P1_MAX_LIVES;
 const BERSERKER_LIVES_THRESHOLD = 2;
-const BERSERKER_DAMAGE_MULT = 1.35;
+const BERSERKER_DAMAGE_MULT = 1.72;
+const BERSERKER_HUD_L1 = '>> P1 OVERDRIVE <<';
+const BERSERKER_HUD_L2 = 'LIMITE DE DANO: OFF';
 
 // Super meter
 const SUPER_MAX = 100;
@@ -93,19 +122,30 @@ let phaseTransition = null;
 const PHASE2_TRIGGER_PCT = 0.5;
 const P2_PHASE2_HP_BONUS = 120;
 const P2_PHASE2_SCALE = 1.4;
-const P2_PHASE2_DAMAGE = 14;
+const P2_PHASE2_DAMAGE = 20;
+const P2_BOSS_DASH_DAMAGE = 18;
 const P2_PHASE2_SPEED = 3.2;
 const TRAP_DAMAGE = 5;
 const TRAP_STUN_DURATION = 60;
-const TRAP_SPAWN_INTERVAL_MIN = 90;
-const TRAP_SPAWN_INTERVAL_MAX = 180;
+const TRAP_SPAWN_INTERVAL_MIN = 105;
+const TRAP_SPAWN_INTERVAL_MAX = 200;
 const TRAP_LIFETIME = 300;
-const TRAP_MAX_ACTIVE = 4;
+const TRAP_MAX_ACTIVE = 2;
 const BOSS_PROJ_SPEED = 4;
-const BOSS_PROJ_DAMAGE = 12;
-const BOSS_WAVE_DAMAGE = 10;
-const BOSS_RAIN_DAMAGE = 8;
-const BOSS_POWER_COOLDOWN = 120;
+const BOSS_PROJ_DAMAGE = 15;
+const BOSS_WAVE_DAMAGE = 13;
+const BOSS_RAIN_DAMAGE = 11;
+const BOSS_POWER_COOLDOWN = 78;
+const P2_SHIELD_WIDTH = 56;
+const P2_SHIELD_OFFSET_X = 12;
+const P2_SHIELD_OFFSET_Y = -52;
+const P2_SHIELD_BLOCK_CHANCE = 0.62;
+const P2_PHASE2_SHIELD_WIDTH = 50;
+const P2_PHASE2_SHIELD_BLOCK_CHANCE = 0.154;
+let p2ShieldFlashTimer = 0;
+let p2ShieldFailTimer = 0;
+let p2ShieldFailX = 0;
+let p2ShieldFailY = 0;
 
 // Explosão digital
 let deathExplosion = null;
@@ -113,14 +153,679 @@ let deathExplosion = null;
 // Victory FX
 let victoryTimer = 0;
 let victoryParticles = [];
+const VICTORY_CORPSE_PAUSE_FRAMES = 42;
 
 function isP1Berserker() {
   return p1Lives <= BERSERKER_LIVES_THRESHOLD;
 }
 
+function berserkerScreenFxActive() {
+  return isP1Berserker() && (
+    state === 'playing' ||
+    state === 'pre_phase2' ||
+    state === 'phase2_intro'
+  );
+}
+
+function getBerserkerScreenShake() {
+  const t = bgOffset;
+  const amp = 1.35;
+  return {
+    x: (Math.sin(t * 0.37) + Math.sin(t * 0.91) * 0.52) * amp,
+    y: (Math.cos(t * 0.29) + Math.sin(t * 0.64) * 0.48) * amp * 0.72
+  };
+}
+
+function renderBerserkerScreenGlitch(ctx) {
+  const t = bgOffset;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+
+  for (let i = 0; i < 11; i++) {
+    if (Math.sin(t * (0.13 + i * 0.019) + i * 0.88) > 0.28) {
+      const gy = (t * (5.5 + i * 1.1) + i * 43) % H;
+      ctx.globalAlpha = 0.045 + (i % 4) * 0.02;
+      ctx.fillStyle = i % 3 === 0 ? '#00ffee' : i % 3 === 1 ? '#ff00aa' : '#fff44f';
+      ctx.fillRect(0, gy, W, 1 + (i % 4));
+    }
+  }
+
+  for (let v = 0; v < 8; v++) {
+    if (Math.sin(t * 0.21 + v * 1.17) > 0.42) {
+      const vx = (t * (10 + v * 2.1) + v * 71) % (W - 3);
+      ctx.globalAlpha = 0.055;
+      ctx.fillStyle = v % 2 ? '#ff66cc' : '#66fff6';
+      ctx.fillRect(vx, 0, 2 + (v % 4), H);
+    }
+  }
+
+  for (let b = 0; b < 6; b++) {
+    if (Math.sin(t * 0.35 + b * 2.05) > 0.68) {
+      const bx = (t * 19 + b * 97) % (W - 50);
+      const bw = 18 + (b * 19) % 55;
+      const by = ((t * 12) + b * 79) % (H - 24);
+      ctx.globalAlpha = 0.075;
+      ctx.fillStyle = b % 2 ? '#ffffff' : '#ff00ff';
+      ctx.fillRect(bx, by, bw, 3 + (b % 6));
+    }
+  }
+
+  if (Math.sin(t * 0.26) > 0.58 || t % 11 === 0 || t % 13 === 4 || t % 17 === 9) {
+    const sliceH = 7 + (t % 12);
+    const sy = (t * 22 + (t >> 1) * 19) % (H - sliceH);
+    ctx.globalAlpha = 0.085;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, sy, W, sliceH);
+    ctx.globalAlpha = 0.055;
+    ctx.fillStyle = 'rgba(0, 255, 255, 0.75)';
+    ctx.fillRect(3, sy + 1, W - 6, sliceH - 2);
+    ctx.fillStyle = 'rgba(255, 0, 160, 0.45)';
+    ctx.fillRect(0, sy + 2, W, Math.max(1, sliceH - 4));
+  }
+
+  if ((t + (t >> 2)) % 10 < 3) {
+    ctx.globalAlpha = 0.055;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, W, 12 + (t % 8));
+    ctx.fillRect(0, H - 16 - (t % 6), W, 16 + (t % 6));
+  }
+
+  if (Math.sin(t * 0.41) > 0.75) {
+    const gx = (t * 31) % W;
+    ctx.globalAlpha = 0.07;
+    ctx.fillStyle = '#ff0066';
+    ctx.fillRect(gx, 0, 4, H);
+    ctx.fillStyle = '#00fff7';
+    ctx.fillRect((gx + 14) % W, 0, 3, H);
+  }
+
+  ctx.restore();
+}
+
+function getPrePhase2ScreenShake() {
+  const prog = Math.min(1, prePhase2Timer / PRE_PHASE2_DURATION);
+  const amp = 2.4 + prog * 4.2 + Math.sin(prePhase2Timer * 0.48) * 1.4;
+  const T = prePhase2Timer * 1.85 + bgOffset * 0.55;
+  return {
+    x: (Math.sin(T * 0.53) + Math.sin(T * 1.09) * 0.64) * amp,
+    y: (Math.cos(T * 0.47) + Math.sin(T * 0.93) * 0.6) * amp * 0.8
+  };
+}
+
+function getOverclockScreenShake() {
+  const t = bgOffset;
+  const amp = 1.8;
+  return {
+    x: (Math.sin(t * 0.95) + Math.cos(t * 1.7) * 0.45) * amp,
+    y: (Math.cos(t * 0.82) + Math.sin(t * 1.35) * 0.4) * amp * 0.62
+  };
+}
+
+function renderPrePhase2ScreenGlitch(ctx) {
+  const T = prePhase2Timer + bgOffset;
+  const B = bgOffset;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+
+  for (let i = 0; i < 10; i++) {
+    if (Math.sin(T * 0.16 + i * 0.9) > 0.28) {
+      const y = (T * (2.8 + i * 0.35) + i * 47) % H;
+      ctx.globalAlpha = 0.07 + (i % 3) * 0.025;
+      ctx.fillStyle = i % 2 ? '#00f5ff' : '#ff45d0';
+      ctx.fillRect(0, y, W, 1 + (i % 3));
+    }
+  }
+
+  if ((T + B * 2) % 6 < 2 || (T * 3) % 11 < 2) {
+    ctx.globalAlpha = 0.1;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  const sliceH = 14 + (T % 7);
+  const sy = (T * 23 + B * 5) % (H - sliceH);
+  ctx.globalAlpha = 0.09;
+  ctx.fillStyle = 'rgba(255,0,180,0.5)';
+  ctx.fillRect(0, sy, W, sliceH);
+  ctx.fillStyle = 'rgba(0,255,255,0.35)';
+  ctx.fillRect(3, sy + 2, W - 6, sliceH - 4);
+
+  for (let j = 0; j < 6; j++) {
+    const bx = (T * 19 + j * 83) % (W - 24);
+    const by = (T * 17 + j * 61) % (H - 16);
+    if (Math.sin(T * 0.27 + j * 1.1) > 0.42) {
+      ctx.globalAlpha = 0.09;
+      ctx.fillStyle = j % 2 ? '#ffffff' : '#aa66ff';
+      ctx.fillRect(bx, by, 18 + (j % 4) * 6, 2 + (j % 2));
+    }
+  }
+
+  if (Math.sin(T * 0.31) > 0.55) {
+    ctx.globalAlpha = 0.06;
+    ctx.fillStyle = '#ff0066';
+    ctx.fillRect(0, 0, 5, H);
+    ctx.fillStyle = '#00ffff';
+    ctx.fillRect(W - 5, 0, 5, H);
+  }
+
+  ctx.restore();
+}
+
+function renderBossDefeatTerminal(ctx) {
+  if (victoryTimer < VICTORY_CORPSE_PAUSE_FRAMES) return;
+  const t = victoryTimer - VICTORY_CORPSE_PAUSE_FRAMES;
+  const cx = W / 2;
+  const cy = H / 2;
+  const panelPad = 14;
+  const panelX = panelPad;
+  const panelY = 24;
+  const panelW = W - panelPad * 2;
+  const panelH = H - 48;
+
+  // Transition before terminal: full-screen glitch + CRT power-off effect.
+  const bootDelay = 30;
+  if (t < bootDelay) {
+    const p = t / Math.max(1, bootDelay);
+    ctx.save();
+    ctx.fillStyle = 'rgba(4, 2, 14, 0.98)';
+    ctx.fillRect(0, 0, W, H);
+
+    // Glitch bars over the whole screen.
+    for (let i = 0; i < 14; i++) {
+      if (Math.sin(t * 0.35 + i * 0.7) > -0.15) {
+        const gy = (t * (3.2 + i * 0.27) + i * 29) % H;
+        const gh = 1 + (i % 3);
+        ctx.globalAlpha = 0.08 + (i % 4) * 0.03;
+        ctx.fillStyle = i % 2 ? '#00f7ff' : '#ff45d0';
+        ctx.fillRect(0, gy, W, gh);
+      }
+    }
+
+    // Quick white/cyan strobe.
+    if ((t % 6) < 2 || Math.sin(t * 0.9) > 0.8) {
+      ctx.globalAlpha = 0.08 + (1 - p) * 0.2;
+      ctx.fillStyle = t % 2 === 0 ? '#ffffff' : '#6ff8ff';
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // "Screen turning off" collapse line, then reopen.
+    const offPhase = 1 - Math.abs(0.5 - p) * 2; // peaks in the middle
+    const lineH = Math.max(2, Math.floor(H * (1 - offPhase * 0.96)));
+    const y = cy - lineH / 2;
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = 'rgba(8,0,20,0.85)';
+    ctx.fillRect(0, 0, W, y);
+    ctx.fillRect(0, y + lineH, W, H - (y + lineH));
+    ctx.globalAlpha = 0.7;
+    ctx.fillStyle = '#a6ffff';
+    ctx.fillRect(0, cy - 1, W, 2);
+
+    ctx.restore();
+    return;
+  }
+
+  // Full-screen dark terminal base.
+  ctx.save();
+  ctx.fillStyle = 'rgba(3, 8, 18, 0.96)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Outer cyber frame.
+  ctx.strokeStyle = 'rgba(0,255,255,0.45)';
+  ctx.lineWidth = 2;
+  ctx.shadowColor = '#00f5ff';
+  ctx.shadowBlur = 12;
+  ctx.strokeRect(panelX, panelY, panelW, panelH);
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'rgba(255,0,180,0.28)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(panelX + 6, panelY + 6, panelW - 12, panelH - 12);
+
+  // Scanlines.
+  ctx.fillStyle = 'rgba(0,0,0,0.16)';
+  for (let y = 0; y < H; y += 3) ctx.fillRect(0, y, W, 1);
+
+  // Header bar.
+  const headPulse = 0.55 + 0.45 * Math.sin(t * 0.08);
+  ctx.fillStyle = `rgba(0,255,255,${0.06 + 0.05 * headPulse})`;
+  ctx.fillRect(panelX + 2, panelY + 2, panelW - 4, 22);
+  ctx.fillStyle = '#89ffff';
+  ctx.font = 'bold 12px monospace';
+  ctx.fillText('NEURAL CORE TERMINAL :: UNIT CQ-02 :: POST-BATTLE REPORT', panelX + 10, panelY + 17);
+  ctx.fillStyle = `rgba(255,120,210,${0.35 + 0.25 * headPulse})`;
+  ctx.fillRect(panelX + 8, panelY + 21, panelW - 16, 1);
+
+  // Terminal log area.
+  const logX = panelX + 14;
+  const logY = panelY + 38;
+  const logW = panelW - 28;
+  const logH = panelH - 86;
+  ctx.fillStyle = 'rgba(0,20,30,0.55)';
+  ctx.fillRect(logX, logY, logW, logH);
+
+  const logs = [
+    '[BOOT] AI kernel handshake.................OK',
+    '[AUTH] Quantum key ladder..................VALID',
+    '[SCAN] Combat telemetry stream.............LIVE',
+    '[TRACE] Motor cortex thread...............UNSTABLE',
+    '[WARN] Adaptive loop divergence............+38%',
+    '[WARN] External damage overflow............CRITICAL',
+    '[PATCH] Self-healing subsystem.............FAILED',
+    '[TRACE] Neural lattice checksum............MISMATCH',
+    '[IO] Weapon bus channel A..................OFFLINE',
+    '[IO] Weapon bus channel B..................OFFLINE',
+    '[CORE] Autonomous routine.................ABORTED',
+    '[SEC] Emergency sandbox....................TRIGGERED',
+    '[MEM] Conscious shard archive..............SEALED',
+    '[SYS] Shutdown sequence....................RUNNING',
+  ];
+
+  const lineH = 17;
+  const linesVisible = Math.floor(logH / lineH);
+  const bootDelayForLogs = 30;
+  const logStartT = Math.max(0, t - bootDelayForLogs);
+  const progressLines = Math.min(logs.length, Math.floor(logStartT / 11));
+  const startLine = Math.max(0, progressLines - linesVisible);
+
+  ctx.font = '13px monospace';
+  for (let i = 0; i < linesVisible; i++) {
+    const idx = startLine + i;
+    if (idx >= progressLines) break;
+    const yy = logY + 16 + i * lineH;
+    const line = logs[idx];
+    const lineLocalT = Math.max(0, logStartT - idx * 11);
+    const charCount = Math.max(0, Math.min(line.length, Math.floor(lineLocalT / 1.25)));
+    const typingLine = line.slice(0, charCount);
+    const glitch = (t + i * 7) % 27 === 0 ? (Math.random() > 0.5 ? ' <ERR>' : ' <SYNC>') : '';
+    ctx.fillStyle = idx % 3 === 0 ? '#79f7ff' : idx % 3 === 1 ? '#ff75d8' : '#9af6c5';
+    ctx.globalAlpha = 0.9;
+    ctx.fillText(`> ${typingLine}${charCount >= line.length ? glitch : ''}`, logX + 8, yy);
+  }
+
+  // Cursor blink.
+  if (Math.sin(t * 0.3) > 0) {
+    const activeIdx = Math.max(0, progressLines - 1);
+    const activeLine = logs[Math.min(activeIdx, logs.length - 1)] || '';
+    const activeLocalT = Math.max(0, logStartT - activeIdx * 11);
+    const activeChars = Math.max(0, Math.min(activeLine.length, Math.floor(activeLocalT / 1.25)));
+    const cyLine = logY + 16 + Math.min(linesVisible - 1, Math.max(0, progressLines - startLine - 1)) * lineH - 10;
+    ctx.fillStyle = '#00ffff';
+    ctx.fillRect(logX + 24 + activeChars * 7, cyLine, 9, 3);
+  }
+
+  // Final message block.
+  if (t > bootDelay + 64) {
+    const a = Math.min(1, (t - (bootDelay + 64)) / 26);
+    const bw = Math.min(panelW - 34, 470);
+    const bh = 66;
+    const bx = cx - bw / 2;
+    const by = panelY + panelH - bh - 14;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(8, 12, 28, 0.92)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = 'rgba(255,0,170,0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(bx, by, bw, bh);
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 22px monospace';
+    ctx.shadowColor = '#ff2bd1';
+    ctx.shadowBlur = 16;
+    ctx.fillStyle = '#ffd9f5';
+    ctx.fillText('BOSS DERROTADO', cx, by + 26);
+    ctx.shadowBlur = 0;
+
+    ctx.font = 'bold 15px monospace';
+    ctx.fillStyle = '#9ef7ff';
+    ctx.fillText('PROGRAMA FINALIZADO', cx, by + 50);
+    ctx.textAlign = 'left';
+  }
+  ctx.restore();
+}
+
+function renderPhase2BootTerminal(ctx, t) {
+  const cx = W / 2;
+  const cy = H / 2;
+  const pulse = 0.55 + 0.45 * Math.sin(t * 0.09);
+
+  ctx.save();
+  // Full-screen terminal base.
+  ctx.fillStyle = 'rgba(2,8,18,0.94)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Frame + corners.
+  ctx.strokeStyle = `rgba(0,255,255,${0.34 + 0.18 * pulse})`;
+  ctx.lineWidth = 2;
+  ctx.shadowColor = '#00f6ff';
+  ctx.shadowBlur = 12;
+  ctx.strokeRect(8, 8, W - 16, H - 16);
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = `rgba(255,0,180,${0.2 + 0.12 * pulse})`;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(14, 14, W - 28, H - 28);
+
+  // Header.
+  ctx.fillStyle = 'rgba(0,255,255,0.08)';
+  ctx.fillRect(10, 10, W - 20, 24);
+  ctx.font = 'bold 13px monospace';
+  ctx.fillStyle = '#9afaff';
+  ctx.fillText('TERMINAL :: CIRCUIT QUEEN :: PHASE TRANSITION PROTOCOL', 18, 28);
+
+  // Code area.
+  const logs = [
+    '[BOOT] Linking Queen-Core.................OK',
+    '[AUTH] Neural gate.........................OK',
+    '[SYNC] Combat matrix.......................OK',
+    '[LOAD] Weapon threads......................OK',
+    '[LOAD] Shield adapters.....................OK',
+    '[PATCH] Adaptive combat layer..............OK',
+    '[MODE] Circuit Queen // Phase 2............ONLINE',
+  ];
+  const startY = 66;
+  const lineH = 20;
+  const typedLines = Math.min(logs.length, Math.floor(Math.max(0, t - 22) / 10));
+
+  ctx.font = '14px monospace';
+  for (let i = 0; i < typedLines; i++) {
+    const y = startY + i * lineH;
+    const localT = Math.max(0, t - 22 - i * 10);
+    const chars = Math.min(logs[i].length, Math.floor(localT / 1.2));
+    const line = logs[i].slice(0, chars);
+    ctx.fillStyle = i % 2 ? '#7cf8ff' : '#ff8ce6';
+    ctx.globalAlpha = 0.9;
+    ctx.fillText(`> ${line}`, 24, y);
+  }
+
+  // Main title (two-line cyberpunk boot message).
+  const titleTop = 'INICIANDO';
+  const titleBottom = 'FASE 2 // CIRCUIT QUEEN';
+  const topChars = Math.min(titleTop.length, Math.floor(Math.max(0, t - 30) / 1.5));
+  const bottomChars = Math.min(titleBottom.length, Math.floor(Math.max(0, t - 44) / 1.25));
+  const topText = titleTop.slice(0, topChars);
+  const bottomText = titleBottom.slice(0, bottomChars);
+  const gx = Math.sin(t * 0.33) > 0.72 ? (Math.random() - 0.5) * 5 : 0;
+  const gy = Math.sin(t * 0.29) > 0.8 ? (Math.random() - 0.5) * 2 : 0;
+
+  ctx.textAlign = 'center';
+
+  // Top line (status command style).
+  ctx.font = 'bold 22px monospace';
+  ctx.globalAlpha = 0.28;
+  ctx.fillStyle = '#ff2e9d';
+  ctx.fillText(topText, cx - 2 + gx, cy - 10 + gy);
+  ctx.fillStyle = '#00f7ff';
+  ctx.fillText(topText, cx + 2 + gx, cy - 10 + gy);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#e9fcff';
+  ctx.shadowColor = '#00f7ff';
+  ctx.shadowBlur = 12;
+  ctx.fillText(topText, cx + gx, cy - 10 + gy);
+  ctx.shadowBlur = 0;
+
+  // Divider line.
+  if (t > 42) {
+    const da = Math.min(1, (t - 42) / 10);
+    ctx.globalAlpha = 0.45 * da;
+    ctx.strokeStyle = '#00f7ff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx - 180, cy + 3);
+    ctx.lineTo(cx + 180, cy + 3);
+    ctx.stroke();
+  }
+
+  // Bottom line (phase title).
+  ctx.font = 'bold 29px monospace';
+  ctx.globalAlpha = 0.3;
+  ctx.fillStyle = '#ff2e9d';
+  ctx.fillText(bottomText, cx - 2.4 + gx, cy + 32 + gy);
+  ctx.fillStyle = '#00f7ff';
+  ctx.fillText(bottomText, cx + 2.4 + gx, cy + 32 + gy);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#f4feff';
+  ctx.shadowColor = '#ff2bd1';
+  ctx.shadowBlur = 15;
+  ctx.fillText(bottomText, cx + gx, cy + 32 + gy);
+  ctx.shadowBlur = 0;
+  ctx.textAlign = 'left';
+
+  // Full-screen terminal scanlines + glitches.
+  ctx.globalAlpha = 0.12;
+  ctx.fillStyle = '#000';
+  for (let y = 0; y < H; y += 3) ctx.fillRect(0, y, W, 1);
+  if (Math.sin(t * 0.26) > 0.4) {
+    ctx.globalAlpha = 0.09;
+    ctx.fillStyle = Math.random() > 0.5 ? '#00f7ff' : '#ff46d1';
+    ctx.fillRect(0, (t * 8.4) % H, W, 2);
+  }
+  ctx.restore();
+}
+
 function scaleP1Damage(baseDamage) {
   if (!isP1Berserker()) return baseDamage;
   return Math.round(baseDamage * BERSERKER_DAMAGE_MULT);
+}
+
+function enemyBossDashIntangible() {
+  return bossPhase >= 2 && enemy && enemy.health > 0 && enemy.dashing && !enemy.dashStrikeActive;
+}
+
+function getP2ShieldBox() {
+  if (!enemy || enemy.health <= 0) return null;
+  if (bossPhase >= 2) {
+    const w = P2_PHASE2_SHIELD_WIDTH;
+    const h = Math.floor(enemy.h * 0.9);
+    const shieldY = enemy.y + Math.floor((enemy.h - h) * 0.12);
+    const shieldX = enemy.facingRight
+      ? enemy.x + enemy.w - Math.floor(w * 0.35)
+      : enemy.x - Math.floor(w * 0.65);
+    return { x: shieldX, y: shieldY, w, h };
+  }
+  const shieldHeight = enemy.h + 12;
+  const shieldX = enemy.facingRight
+    ? enemy.x + enemy.w + P2_SHIELD_OFFSET_X
+    : enemy.x - P2_SHIELD_WIDTH - P2_SHIELD_OFFSET_X;
+  const shieldY = enemy.y + P2_SHIELD_OFFSET_Y;
+  return { x: shieldX, y: shieldY, w: P2_SHIELD_WIDTH, h: shieldHeight };
+}
+
+function p2ShieldBlocksHit(hitBox, hitRef = null) {
+  const shieldBox = getP2ShieldBox();
+  if (!shieldBox) return false;
+  if (!checkCollision(hitBox, shieldBox)) return false;
+
+  const blockChance = bossPhase >= 2 ? P2_PHASE2_SHIELD_BLOCK_CHANCE : P2_SHIELD_BLOCK_CHANCE;
+  // Roll only once per projectile/wave to avoid guaranteed block over many frames.
+  if (hitRef) {
+    if (typeof hitRef._shieldBlockRoll !== 'boolean') {
+      hitRef._shieldBlockRoll = Math.random() < blockChance;
+    }
+    if (!hitRef._shieldBlockRoll) {
+      p2ShieldFailTimer = 12;
+      p2ShieldFailX = hitBox.x + hitBox.w / 2;
+      p2ShieldFailY = hitBox.y + hitBox.h / 2;
+      return false;
+    }
+  } else if (Math.random() >= blockChance) {
+    p2ShieldFailTimer = 12;
+    p2ShieldFailX = hitBox.x + hitBox.w / 2;
+    p2ShieldFailY = hitBox.y + hitBox.h / 2;
+    return false;
+  }
+
+  const blocked = true;
+  if (blocked) p2ShieldFlashTimer = 10;
+  return blocked;
+}
+
+function renderP2Shield(ctx) {
+  if (p2ShieldFlashTimer <= 0 && p2ShieldFailTimer <= 0) return;
+  const shieldBox = getP2ShieldBox();
+  if (!shieldBox) return;
+
+  const pulse = 0.65 + 0.35 * Math.sin(bgOffset * 0.22);
+  const flash = Math.min(1, p2ShieldFlashTimer / 10);
+  const alpha = Math.min(0.92, 0.38 + pulse * 0.26 + flash * 0.3);
+  const cx = shieldBox.x + shieldBox.w / 2;
+  const cy = shieldBox.y + shieldBox.h / 2;
+  const rx = shieldBox.w / 2;
+  const ry = shieldBox.h / 2;
+  const skew = enemy && enemy.facingRight ? 1 : -1;
+
+  ctx.save();
+  const g = ctx.createRadialGradient(cx, cy, 4, cx, cy, Math.max(rx, ry) + 16);
+  g.addColorStop(0, `rgba(170,255,255,${alpha})`);
+  g.addColorStop(0.36, `rgba(80,225,255,${alpha * 0.82})`);
+  g.addColorStop(0.7, `rgba(140,70,255,${alpha * 0.4})`);
+  g.addColorStop(1, 'rgba(25,70,180,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.ellipse(cx + skew * 2, cy, rx + 10, ry + 12, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Outer neon shell
+  ctx.strokeStyle = `rgba(190,255,255,${0.65 + flash * 0.3})`;
+  ctx.lineWidth = 2.2;
+  ctx.shadowColor = '#66f2ff';
+  ctx.shadowBlur = 16 + flash * 22;
+  ctx.beginPath();
+  ctx.ellipse(cx + skew * 1.5, cy, rx + 3, ry + 4, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Inner magenta ring for cyberpunk contrast
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = `rgba(255,110,245,${0.35 + flash * 0.2})`;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.ellipse(cx + skew * 1, cy, rx - 6, ry - 8, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Hex-like scan segments
+  ctx.strokeStyle = `rgba(170,255,255,${0.5 + flash * 0.25})`;
+  ctx.lineWidth = 1;
+  const segs = 7;
+  for (let i = 0; i < segs; i++) {
+    const t = i / (segs - 1);
+    const sy = shieldBox.y + 8 + t * (shieldBox.h - 16);
+    const dx = 9 + Math.sin(bgOffset * 0.3 + i * 0.9) * 3;
+    const left = cx - rx + 6 + (i % 2 ? 2 : 0);
+    const right = cx + rx - 6 - (i % 2 ? 2 : 0);
+    ctx.beginPath();
+    ctx.moveTo(left, sy);
+    ctx.lineTo(left + dx, sy - 2);
+    ctx.lineTo(right - dx, sy - 2);
+    ctx.lineTo(right, sy);
+    ctx.stroke();
+  }
+
+  // Glitch shards
+  ctx.fillStyle = `rgba(140,255,255,${0.35 + flash * 0.35})`;
+  for (let i = 0; i < 9; i++) {
+    const a = bgOffset * 0.18 + i * 0.8;
+    const px = cx + Math.cos(a) * (rx * 0.7) + skew * 2;
+    const py = cy + Math.sin(a * 1.3) * (ry * 0.85);
+    ctx.fillRect(px, py, 2, 2);
+  }
+
+  // Failed block effect: digital shield crack/glitch burst.
+  if (p2ShieldFailTimer > 0) {
+    const fp = p2ShieldFailTimer / 12;
+    const failR = 12 + (1 - fp) * 18;
+    const fx = p2ShieldFailX || cx;
+    const fy = p2ShieldFailY || cy;
+
+    ctx.strokeStyle = `rgba(255,70,180,${0.25 + fp * 0.55})`;
+    ctx.lineWidth = 1.4;
+    ctx.shadowColor = '#ff2ad4';
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.arc(fx, fy, failR, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.shadowBlur = 0;
+    for (let i = 0; i < 6; i++) {
+      const a = i * (Math.PI * 2 / 6) + bgOffset * 0.25;
+      const len = 8 + (1 - fp) * 12;
+      const x2 = fx + Math.cos(a) * len;
+      const y2 = fy + Math.sin(a) * len;
+      ctx.strokeStyle = `rgba(255,120,240,${0.2 + fp * 0.6})`;
+      ctx.beginPath();
+      ctx.moveTo(fx, fy);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function renderBossPhase2ShieldPassive(ctx) {
+  if (bossPhase < 2 || !enemy || enemy.health <= 0) return;
+  const b = getP2ShieldBox();
+  if (!b) return;
+  const cx = b.x + b.w / 2;
+  const cy = b.y + b.h / 2;
+  const rx = b.w * 0.52;
+  const ry = b.h * 0.42;
+  const skew = enemy.facingRight ? 1 : -1;
+  const pulse = 0.55 + 0.45 * Math.sin(bgOffset * 0.14);
+  const rot = skew * 0.09;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+
+  ctx.globalAlpha = 0.1 + pulse * 0.06;
+  const g1 = ctx.createRadialGradient(
+    cx + skew * 14, cy - 6, 2,
+    cx + skew * 22, cy + 4, Math.max(rx, ry) * 1.35
+  );
+  g1.addColorStop(0, 'rgba(255, 220, 255, 0.55)');
+  g1.addColorStop(0.35, 'rgba(200, 100, 220, 0.2)');
+  g1.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = g1;
+  ctx.beginPath();
+  ctx.ellipse(cx + skew * 8, cy, rx, ry, rot, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.globalAlpha = 0.08 + pulse * 0.05;
+  const g2 = ctx.createRadialGradient(cx - skew * 10, cy + 10, 0, cx, cy, rx * 0.9);
+  g2.addColorStop(0, 'rgba(120, 255, 255, 0.45)');
+  g2.addColorStop(0.5, 'rgba(60, 180, 255, 0.12)');
+  g2.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = g2;
+  ctx.beginPath();
+  ctx.ellipse(cx + skew * 4, cy + 2, rx * 0.78, ry * 0.88, -rot * 0.8, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.globalAlpha = 0.22 + pulse * 0.12;
+  ctx.strokeStyle = `rgba(160, 255, 255, ${0.35 + pulse * 0.25})`;
+  ctx.lineWidth = 1.4;
+  ctx.shadowColor = '#66ffff';
+  ctx.shadowBlur = 6 + pulse * 6;
+  ctx.beginPath();
+  ctx.ellipse(cx + skew * 6, cy, rx + 3, ry + 4, rot, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  ctx.globalAlpha = 0.2 + pulse * 0.1;
+  ctx.strokeStyle = `rgba(255, 120, 220, ${0.28 + pulse * 0.2})`;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 6]);
+  ctx.beginPath();
+  ctx.ellipse(cx + skew * 6, cy, rx + 8, ry + 10, rot, -0.35 * Math.PI, 0.35 * Math.PI);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  for (let i = 0; i < 14; i++) {
+    const t = (i / 14) * Math.PI * 2 + bgOffset * 0.045;
+    const px = cx + Math.cos(t) * (rx * 0.82) + skew * 10;
+    const py = cy + Math.sin(t * 1.1) * (ry * 0.75);
+    ctx.globalAlpha = 0.12 + (i % 4) * 0.03;
+    ctx.fillStyle = i % 3 === 0 ? '#ffccff' : i % 3 === 1 ? '#aaffff' : '#ffaadd';
+    ctx.beginPath();
+    ctx.arc(px, py, 1.1 + (i % 3) * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
 }
 
 function triggerBossCinematic(kind, intensity = 1) {
@@ -218,7 +923,7 @@ function spawnVictoryFX() {
 
 function spawnDeathExplosion(cx, cy) {
   const particles = [];
-  const colors = ['#0ff', '#00ffaa', '#ff0055', '#f0f', '#fff', '#00aaff', '#ffff00'];
+  const colors = [P1_NEON_PRIMARY, P1_NEON_SECONDARY, '#ff5bff', '#fff', '#ffe35a', '#7dfbff'];
 
   // Ring burst
   for (let i = 0; i < 40; i++) {
@@ -286,6 +991,41 @@ function spawnDeathExplosion(cx, cy) {
     });
   }
 
+  // Pixel shards burst (denser cyberpunk fragmentation)
+  for (let i = 0; i < 64; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 1.8 + Math.random() * 5.2;
+    const size = 2 + Math.floor(Math.random() * 4);
+    particles.push({
+      x: cx + (Math.random() - 0.5) * 12,
+      y: cy + (Math.random() - 0.5) * 12,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - 1.5,
+      size,
+      rot: Math.random() * Math.PI * 2,
+      rotSpd: (Math.random() - 0.5) * 0.3,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      life: 45 + Math.random() * 38,
+      maxLife: 83,
+      type: 'pixel'
+    });
+  }
+
+  // Core bloom rings for brighter nova center
+  for (let i = 0; i < 2; i++) {
+    particles.push({
+      x: cx, y: cy,
+      radius: 0,
+      maxRadius: 70 + i * 40,
+      speed: 4 + i * 1.2,
+      color: i === 0 ? P1_NEON_PRIMARY : P1_NEON_SECONDARY,
+      life: 26 + i * 8,
+      maxLife: 34 + i * 10,
+      thick: 3.5 - i,
+      type: 'novaRing'
+    });
+  }
+
   deathExplosion = { particles, timer: 0, fadeIn: 0 };
 }
 
@@ -315,6 +1055,15 @@ function updateDeathExplosion() {
       p.y += p.vy;
     } else if (p.type === 'ring') {
       p.radius += p.speed;
+    } else if (p.type === 'pixel') {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vx *= 0.97;
+      p.vy = p.vy * 0.97 + 0.04;
+      p.rot += p.rotSpd;
+      p.size *= 0.992;
+    } else if (p.type === 'novaRing') {
+      p.radius += p.speed;
     }
   });
 
@@ -323,6 +1072,23 @@ function updateDeathExplosion() {
 
 function renderDeathExplosion(ctx) {
   if (!deathExplosion) return;
+
+  // Soft background pulse to make the detonation feel fuller.
+  const t = deathExplosion.timer;
+  const pulseA = Math.max(0, 0.26 - t * 0.0052);
+  if (pulseA > 0.01) {
+    const coreX = player ? player.x + player.w / 2 : W / 2;
+    const coreY = player ? player.y + player.h / 2 : H / 2;
+    const bg = ctx.createRadialGradient(coreX, coreY, 10, coreX, coreY, 220);
+    bg.addColorStop(0, `rgba(0,255,220,${pulseA})`);
+    bg.addColorStop(0.45, `rgba(0,140,255,${pulseA * 0.45})`);
+    bg.addColorStop(0.85, `rgba(255,0,220,${pulseA * 0.28})`);
+    bg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.save();
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
 
   deathExplosion.particles.forEach(p => {
     const alpha = Math.max(0, p.life / p.maxLife);
@@ -360,10 +1126,251 @@ function renderDeathExplosion(ctx) {
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
       ctx.stroke();
+    } else if (p.type === 'pixel') {
+      const s = Math.max(1, p.size);
+      ctx.globalAlpha = alpha * 0.9;
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.color;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = 8;
+      ctx.fillRect(-s * 0.5, -s * 0.5, s, s);
+      ctx.globalAlpha = alpha * 0.35;
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(-s * 0.25, -s * 0.25, s * 0.5, s * 0.5);
+    } else if (p.type === 'novaRing') {
+      ctx.globalAlpha = alpha * 0.65;
+      ctx.strokeStyle = p.color;
+      ctx.lineWidth = p.thick || 2.5;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = 18;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     ctx.restore();
   });
+}
+
+function spawnP1CyberJumpBolt(fighter) {
+  if (!fighter) return;
+  const coreColor = Math.random() < 0.5 ? P1_NEON_PRIMARY : P1_NEON_SECONDARY;
+  const fanSign = Math.random() < 0.5 ? -1 : 1;
+  const px = fighter.x + fighter.w * (0.35 + Math.random() * 0.3);
+  const py = fighter.y + fighter.h * (0.25 + Math.random() * 0.5);
+  const drift = (Math.random() - 0.5) * 1.8 + fanSign * (0.9 + Math.random() * 1.6);
+  cyberJumpBolts.push({
+    x: px,
+    y: py,
+    vx: drift + (fighter.facingRight ? 0.35 : -0.35),
+    vy: -0.2 - Math.random() * 0.7,
+    size: 8 + Math.random() * 8,
+    life: 24 + Math.random() * 10,
+    maxLife: 34,
+    hitDone: false,
+    color: coreColor,
+    side: fanSign
+  });
+}
+
+function updateP1CyberJumpBolts() {
+  cyberJumpBolts.forEach(b => {
+    b.life--;
+    b.x += b.vx;
+    b.y += b.vy;
+    b.vx *= 0.95;
+    b.vy += 0.03;
+
+    if (!b.hitDone && enemy && enemy.health > 0 && state === 'playing') {
+      const boltBox = { x: b.x - b.size * 0.5, y: b.y - b.size * 0.5, w: b.size, h: b.size };
+      const eBox = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
+      if (checkCollision(boltBox, eBox) && !enemyBossDashIntangible()) {
+        enemy.takeHit(scaleP1Damage(CYBER_JUMP_BOLT_DAMAGE));
+        b.hitDone = true;
+      }
+    }
+  });
+  cyberJumpBolts = cyberJumpBolts.filter(b => b.life > 0);
+}
+
+function renderP1CyberJumpBolts(ctx) {
+  cyberJumpBolts.forEach(b => {
+    const a = Math.max(0, b.life / b.maxLife);
+    const s = Math.max(2, b.size * (0.45 + a * 0.6));
+    const x = b.x;
+    const y = b.y;
+    ctx.save();
+    ctx.globalAlpha = a * 0.95;
+    ctx.strokeStyle = `rgba(0,255,255,${0.4 + a * 0.5})`;
+    ctx.lineWidth = 1.8;
+    ctx.shadowColor = '#00ffee';
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.moveTo(x - s * 0.45, y - s * 0.3);
+    ctx.lineTo(x - s * 0.1, y + s * 0.1);
+    ctx.lineTo(x + s * 0.15, y - s * 0.05);
+    ctx.lineTo(x + s * 0.42, y + s * 0.32);
+    ctx.stroke();
+
+    ctx.globalAlpha = a * 0.6;
+    const glow = ctx.createRadialGradient(x, y, 0, x, y, s * 1.35);
+    glow.addColorStop(0, b.color || 'rgba(140,255,255,0.55)');
+    glow.addColorStop(0.45, b.side > 0 ? 'rgba(255,80,240,0.32)' : 'rgba(80,170,255,0.3)');
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(x, y, s * 1.25, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Side fan streak: opens the effect outward.
+    const dir = b.side > 0 ? 1 : -1;
+    ctx.globalAlpha = a * 0.42;
+    ctx.strokeStyle = dir > 0 ? 'rgba(255,90,235,0.75)' : 'rgba(80,210,255,0.75)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + dir * (s * 2.6), y - s * 0.55);
+    ctx.lineTo(x + dir * (s * 3.2), y + s * 0.25);
+    ctx.stroke();
+
+    ctx.globalAlpha = a * 0.85;
+    ctx.fillStyle = 'rgba(255, 80, 240, 0.88)';
+    ctx.fillRect(x - 1.8, y - 1.8, 3.6, 3.6);
+    ctx.restore();
+  });
+}
+
+class CyberGroundSurge {
+  constructor(x, dirRight = true) {
+    this.x = x;
+    this.dirRight = !!dirRight;
+    this.y = GROUND_Y - 8;
+    this.life = 0;
+    this.maxLife = 140;
+    this.alive = true;
+    this.hitDone = false;
+    this.w = 40;
+    this.h = 20;
+  }
+
+  update() {
+    this.life++;
+    this.x += this.dirRight ? CYBER_GROUND_SURGE_SPEED : -CYBER_GROUND_SURGE_SPEED;
+    if (this.x < -100 || this.x > W + 100 || this.life > this.maxLife) this.alive = false;
+  }
+
+  getBox() {
+    return { x: this.x - this.w / 2, y: this.y - this.h, w: this.w, h: this.h + 10 };
+  }
+
+  render(ctx) {
+    const a = Math.max(0, 1 - this.life / this.maxLife);
+    const dir = this.dirRight ? 1 : -1;
+    const headX = this.x;
+    const baseY = GROUND_Y - 4;
+    const pulse = 0.55 + 0.45 * Math.sin(this.life * 0.36);
+    ctx.save();
+    ctx.globalAlpha = 0.88 * a;
+    ctx.shadowColor = '#00ffee';
+    ctx.shadowBlur = 16 + 6 * pulse;
+
+    // Main sonic wedge
+    const g = ctx.createLinearGradient(headX - dir * 52, baseY - 26, headX + dir * 58, baseY + 10);
+    g.addColorStop(0, 'rgba(0,255,220,0)');
+    g.addColorStop(0.3, 'rgba(0,255,220,0.45)');
+    g.addColorStop(0.68, 'rgba(80,200,255,0.52)');
+    g.addColorStop(1, 'rgba(255,80,240,0.2)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(headX - dir * 44, baseY + 4);
+    ctx.lineTo(headX - dir * 4, baseY - 20 - 4 * pulse);
+    ctx.lineTo(headX + dir * 58, baseY - 2);
+    ctx.lineTo(headX - dir * 2, baseY + 10 + 3 * pulse);
+    ctx.closePath();
+    ctx.fill();
+
+    // Sonic rings spreading sideways on ground
+    for (let i = 0; i < 3; i++) {
+      const ringX = headX - dir * (12 + i * 16);
+      const ringW = 14 + i * 10 + pulse * 4;
+      const ringH = 5 + i * 2;
+      ctx.globalAlpha = a * (0.45 - i * 0.1);
+      ctx.strokeStyle = i % 2
+        ? 'rgba(255,90,240,0.9)'
+        : 'rgba(120,255,255,0.9)';
+      ctx.lineWidth = 1.8 - i * 0.35;
+      ctx.beginPath();
+      ctx.ellipse(ringX, baseY + 2, ringW, ringH, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Wide floor wavefronts (acoustic ripple arcs)
+    for (let i = 0; i < 4; i++) {
+      const wx = headX - dir * (28 + i * 22);
+      const ww = 24 + i * 14 + pulse * 7;
+      const wh = 8 + i * 2.4;
+      const wa = a * (0.42 - i * 0.08);
+      if (wa <= 0) continue;
+      ctx.globalAlpha = wa;
+      ctx.strokeStyle = i % 2
+        ? 'rgba(255,120,245,0.95)'
+        : 'rgba(120,255,255,0.95)';
+      ctx.lineWidth = 2.2 - i * 0.35;
+      ctx.beginPath();
+      // Half-open arc for a "sound wave" look moving across floor
+      ctx.ellipse(wx, baseY + 4, ww, wh, 0, Math.PI * 0.08, Math.PI * 0.92);
+      ctx.stroke();
+    }
+
+    // Horizontal sonic bands hugging the ground
+    for (let i = 0; i < 5; i++) {
+      const bandLen = 18 + i * 14 + pulse * 6;
+      const bx = headX - dir * (10 + i * 16);
+      const by = baseY + 1 + i * 1.6;
+      const ba = a * (0.35 - i * 0.05);
+      if (ba <= 0) continue;
+      ctx.globalAlpha = ba;
+      ctx.strokeStyle = i % 2
+        ? 'rgba(0,255,230,0.9)'
+        : 'rgba(255,120,255,0.85)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(bx - dir * bandLen * 0.5, by);
+      ctx.lineTo(bx + dir * bandLen * 0.5, by);
+      ctx.stroke();
+    }
+
+    // Crackling top line
+    ctx.globalAlpha = a * 0.9;
+    ctx.strokeStyle = 'rgba(210,255,255,0.96)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(headX - dir * 34, baseY - 2);
+    ctx.lineTo(headX - dir * 8, baseY - 10 - 2 * pulse);
+    ctx.lineTo(headX + dir * 14, baseY - 4);
+    ctx.lineTo(headX + dir * 34, baseY - 13 + 2 * pulse);
+    ctx.lineTo(headX + dir * 54, baseY - 5);
+    ctx.stroke();
+
+    // Ground glow trail
+    const floorGlow = ctx.createRadialGradient(headX, baseY + 3, 0, headX, baseY + 3, 44);
+    floorGlow.addColorStop(0, `rgba(0,255,220,${0.25 * a})`);
+    floorGlow.addColorStop(0.5, `rgba(255,80,240,${0.18 * a})`);
+    floorGlow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = floorGlow;
+    ctx.beginPath();
+    ctx.ellipse(headX, baseY + 3, 46, 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Bright front core
+    ctx.globalAlpha = a * 0.95;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.ellipse(headX + dir * 36, baseY - 3, 4 + pulse * 2, 3 + pulse, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
 }
 
 // Background animation
@@ -380,12 +1387,40 @@ let bgImageP2Loaded = false;
 let bgImageP2InitDone = false;
 /** true durante transição / fase 2 — troca o fundo no primeiro frame do overlay (flash cobre a troca) */
 let showBossPhase2Background = false;
+let phase2Intro = null;
 
 const PRE_PHASE2_DURATION = 110;
 let prePhase2Timer = 0;
-/** explosões no canvas — substituir por sprites depois */
+const PRE_PHASE2_EXPLOSION_SPRITE = {
+  basePath: 'assets/fight/enemy-explosion',
+  prefix: 'enemy-explosion-',
+  count: 6,
+  frameHold: 3,
+  scaleMin: 0.9,
+  scaleMax: 1.8,
+  /** multiplicador aleatório por explosão (algumas bem pequenas, outras grandes) */
+  sizeRandMin: 0.42,
+  sizeRandMax: 1.65
+};
+let prePhase2ExplosionSprites = [];
+let prePhase2ExplosionSpritesReady = false;
 let prePhase2Explosions = [];
 let bossImploding = false;
+let prePhase2ExplosionSfxCooldown = 0;
+
+function loadPrePhase2ExplosionSprites() {
+  if (prePhase2ExplosionSprites.length > 0) return;
+  for (let i = 1; i <= PRE_PHASE2_EXPLOSION_SPRITE.count; i++) {
+    const img = new Image();
+    img.onload = () => {
+      if (prePhase2ExplosionSprites.filter(s => s.complete && s.naturalWidth > 0).length >= PRE_PHASE2_EXPLOSION_SPRITE.count) {
+        prePhase2ExplosionSpritesReady = true;
+      }
+    };
+    img.src = `${PRE_PHASE2_EXPLOSION_SPRITE.basePath}/${PRE_PHASE2_EXPLOSION_SPRITE.prefix}${i}.png`;
+    prePhase2ExplosionSprites.push(img);
+  }
+}
 
 // =============================================================================
 // SPRITE SYSTEM
@@ -393,6 +1428,7 @@ let bossImploding = false;
 
 const SPRITE_SCALE = 3;
 const DESTROYER_SCALE_FIX = 0.72;
+const ENEMY_PHASE2_SPRITE_KEY = 'Enemy-Punk-Phase2';
 
 const SPRITE_DEFS = {
   'Enemy-Punk': {
@@ -408,19 +1444,39 @@ const SPRITE_DEFS = {
       dead:  { folder: 'Destroyer/Dead',  prefix: 'dead',  count: 7, speed: 7, loop: false },
     }
   },
-  'Brawler-Girl': {
-    basePath: 'assets/fight/Brawler-Girl',
+  // Optional phase 2 skin for P2 boss.
+  // If these files don't exist yet, runtime falls back to phase 1 sprites.
+  [ENEMY_PHASE2_SPRITE_KEY]: {
+    basePath: 'assets/fight',
     defaultFacingRight: true,
     animations: {
-      idle:      { folder: 'Idle',      prefix: 'idle',      count: 4,  speed: 8, loop: true },
-      walk:      { folder: 'Walk',      prefix: 'walk',      count: 10, speed: 5, loop: true },
-      punch:     { folder: 'Punch',     prefix: 'punch',     count: 3,  speed: 5, loop: false },
-      kick:      { folder: 'Kick',      prefix: 'kick',      count: 5,  speed: 5, loop: false },
-      jab:       { folder: 'Jab',       prefix: 'jab',       count: 3,  speed: 4, loop: false },
-      jump:      { folder: 'Jump',      prefix: 'jump',      count: 4,  speed: 6, loop: false },
-      jump_kick: { folder: 'Jump_kick', prefix: 'jump_kick', count: 3,  speed: 5, loop: false },
-      dive_kick: { folder: 'Dive_kick', prefix: 'dive_kick', count: 5,  speed: 5, loop: false },
-      hurt:      { folder: 'Hurt',      prefix: 'hurt',      count: 2,  speed: 6, loop: false },
+      idle:  { folder: 'DestroyerPhase2/Idle',  prefix: 'idle',  count: 5, speed: 8, loop: true },
+      walk:  { folder: 'DestroyerPhase2/Walk',  prefix: 'walk',  count: 8, speed: 6, loop: true },
+      punch1: { folder: 'DestroyerPhase2/Attack1', prefix: 'attack1_', count: 4, speed: 5, loop: false },
+      punch2: { folder: 'DestroyerPhase2/Attack2', prefix: 'attack2_', count: 2, speed: 5, loop: false },
+      punch3: { folder: 'DestroyerPhase2/Attack3', prefix: 'attack3_', count: 2, speed: 5, loop: false },
+      punch4: { folder: 'DestroyerPhase2/Attack4', prefix: 'attack4_', count: 4, speed: 5, loop: false },
+      hurt:  { folder: 'DestroyerPhase2/Hurt',  prefix: 'hurt',  count: 3, speed: 6, loop: false },
+      shot:  { folder: 'DestroyerPhase2/Shot',  prefix: 'shot',  count: 8, speed: 5, loop: true },
+      chargeHit: { folder: 'DestroyerPhase2/ChargeImpact', prefix: 'charge', count: 5, speed: 4, loop: false },
+      dead:  { folder: 'DestroyerPhase2/Dead',  prefix: 'dead',  count: 4, speed: 7, loop: false },
+    }
+  },
+  'Brawler-Girl': {
+    basePath: 'assets/fight',
+    defaultFacingRight: true,
+    animations: {
+      idle:      { folder: 'player/idle',      prefix: 'idle-',      count: 4,  speed: 8, loop: true },
+      walk:      { folder: 'player/walk',      prefix: 'walk-',      count: 16, speed: 4, loop: true },
+      run:       { folder: 'player/run',       prefix: 'run-',       count: 8,  speed: 4, loop: true },
+      crouch:    { folder: 'player/crouch',    prefix: 'crouch',     count: 1,  speed: 8, loop: false },
+      punch:     { folder: 'player/punch',     prefix: 'punch',      count: 1,  speed: 6, loop: false },
+      jump:      { folder: 'player/jump',      prefix: 'jump-',      count: 4,  speed: 6, loop: false },
+      hurt:      { folder: 'player/hurt',      prefix: 'hurt',       count: 1,  speed: 6, loop: false },
+      kick:      { folder: 'Brawler-Girl/Kick',      prefix: 'kick',      count: 5,  speed: 5, loop: false },
+      jab:       { folder: 'Brawler-Girl/Jab',       prefix: 'jab',       count: 3,  speed: 4, loop: false },
+      jump_kick: { folder: 'player/back-jump', prefix: 'back-jump-', count: 7,  speed: 5, loop: false },
+      dive_kick: { folder: 'Brawler-Girl/Dive_kick', prefix: 'dive_kick', count: 5,  speed: 5, loop: false },
     }
   }
 };
@@ -457,6 +1513,25 @@ function getSprite(charName, animName, frameIndex) {
   return frames[frameIndex % frames.length];
 }
 
+function getFighterSpriteKey(fighter) {
+  if (fighter && !fighter.isPlayer && fighter.charName === 'Enemy-Punk' && bossPhase >= 2) {
+    return ENEMY_PHASE2_SPRITE_KEY;
+  }
+  return fighter?.charName;
+}
+
+function getFighterSpriteDef(fighter) {
+  const key = getFighterSpriteKey(fighter);
+  return SPRITE_DEFS[key] || SPRITE_DEFS[fighter?.charName];
+}
+
+function getFighterSprite(fighter, animName, frameIndex) {
+  const key = getFighterSpriteKey(fighter);
+  const phaseSprite = getSprite(key, animName, frameIndex);
+  if (phaseSprite && phaseSprite.complete && phaseSprite.naturalWidth > 0) return phaseSprite;
+  return getSprite(fighter.charName, animName, frameIndex);
+}
+
 // =============================================================================
 // CLASSES
 // =============================================================================
@@ -477,6 +1552,8 @@ class Fighter {
 
     this.attacking = false;
     this.attackFrame = 0;
+    this.attackAnimDuration = 15;
+    this.activeMeleeAnim = 'punch1';
     this.attackCooldown = 0;
 
     this.hitFlicker = 0;
@@ -507,6 +1584,11 @@ class Fighter {
     this.dashTimer = 0;
     this.dashCooldown = 0;
     this.dashDir = 1;
+    this.dashStrikeActive = false;
+    this.dashStrikeTimer = 0;
+    this.dashStrikeCooldown = 0;
+    this.dashStrikeHitDone = false;
+    this.bossDashHitDone = false;
     this.fwdBuffer = [];
     this.prevFwdPressed = false;
     this.afterimages = [];
@@ -515,12 +1597,16 @@ class Fighter {
     this.bfBuffer = [];
     this.burstCooldown = 0;
     this.groundWaveCooldown = 0;
+    this.cyberJumpCooldown = 0;
+    this.cyberJumpTrailTimer = 0;
+    this.cyberJumpInputBuffer = 0;
   }
 
   getAnimState() {
-    const def = SPRITE_DEFS[this.charName];
+    const def = getFighterSpriteDef(this);
     if (this.health <= 0 && def.animations.dead) return 'dead';
     if (this.hitFlicker > 0) return 'hurt';
+    if (this.dashing && this.onGround && def.animations.walk) return 'walk';
     if (this.forcedAnimTimer > 0 && this.forcedAnim && def.animations[this.forcedAnim]) return this.forcedAnim;
     if (!this.onGround) {
       if (this.attacking && def.animations.jump_kick) {
@@ -530,7 +1616,11 @@ class Fighter {
       }
       return def.animations.jump ? 'jump' : 'idle';
     }
-    if (this.attacking) return 'punch';
+    if (this.attacking) {
+      if (this.activeMeleeAnim && def.animations[this.activeMeleeAnim]) return this.activeMeleeAnim;
+      if (!this.isPlayer && this.charName === 'Enemy-Punk' && bossPhase >= 2 && def.animations.punch1) return 'punch1';
+      return 'punch';
+    }
     if (Math.abs(this.vx) > 0.5) return 'walk';
     return 'idle';
   }
@@ -574,8 +1664,12 @@ class Fighter {
     if (this.attackCooldown > 0) this.attackCooldown--;
     if (this.specialCooldown > 0) this.specialCooldown--;
     if (this.dashCooldown > 0) this.dashCooldown--;
+    if (this.dashStrikeCooldown > 0) this.dashStrikeCooldown--;
     if (this.burstCooldown > 0) this.burstCooldown--;
     if (this.groundWaveCooldown > 0) this.groundWaveCooldown--;
+    if (this.cyberJumpCooldown > 0) this.cyberJumpCooldown--;
+    if (this.cyberJumpTrailTimer > 0) this.cyberJumpTrailTimer--;
+    if (this.cyberJumpInputBuffer > 0) this.cyberJumpInputBuffer--;
     if (this.forcedAnimTimer > 0) this.forcedAnimTimer--;
 
     if (!this.isPlayer && this.queuedProjectileTimer > 0) {
@@ -584,26 +1678,40 @@ class Fighter {
         const px = this.queuedProjectileDirRight ? this.x + this.w + 8 : this.x - 8;
         const py = this.y - 45;
         projectiles.push(new Projectile(px, py, this.queuedProjectileDirRight, this));
-        sndShoot();
+        sndBossProjectileSfx();
       }
     }
 
     // Dash movement
     if (this.dashing) {
-      this.vx = DASH_SPEED * this.dashDir;
+      this.vx = (this.dashStrikeActive ? DASH_STRIKE_SPEED : DASH_SPEED) * this.dashDir;
       this.dashTimer--;
+      if (this.dashStrikeActive) this.dashStrikeTimer--;
 
       this.afterimages.push({
         x: this.x, y: this.y, w: this.w, h: this.h,
         anim: this.currentAnim, frame: this.spriteFrame,
         facingRight: this.facingRight, alpha: 0.7, life: 18,
-        tint: this.afterimages.length % 2 === 0 ? [0, 255, 255] : [0, 200, 255]
+        tint: this.dashStrikeActive
+          ? (this.afterimages.length % 2 === 0 ? [217, 255, 47] : [57, 255, 143])
+          : (this.afterimages.length % 2 === 0 ? [0, 255, 255] : [0, 200, 255])
       });
 
-      if (this.dashTimer <= 0) {
+      if (this.dashTimer <= 0 || (this.dashStrikeActive && this.dashStrikeTimer <= 0)) {
         this.dashing = false;
+        this.dashStrikeActive = false;
         this.vx = 0;
+        this.bossDashHitDone = false;
       }
+    }
+
+    if (
+      this.isPlayer &&
+      this.cyberJumpTrailTimer > 0 &&
+      state === 'playing' &&
+      (this.cyberJumpTrailTimer % CYBER_JUMP_TRAIL_INTERVAL) === 0
+    ) {
+      spawnP1CyberJumpBolt(this);
     }
 
     // Afterimages decay
@@ -612,9 +1720,11 @@ class Fighter {
 
     if (this.attacking) {
       this.attackFrame++;
-      if (this.attackFrame > 15) {
+      if (this.attackFrame > this.attackAnimDuration) {
         this.attacking = false;
         this.attackFrame = 0;
+        this.activeMeleeAnim = 'punch1';
+        this.attackAnimDuration = 15;
       }
     }
 
@@ -628,7 +1738,7 @@ class Fighter {
       this.spriteTimer = 0;
     }
 
-    const def = SPRITE_DEFS[this.charName];
+    const def = getFighterSpriteDef(this);
     const animDef = def.animations[this.currentAnim] || def.animations.idle;
 
     this.spriteTimer++;
@@ -651,17 +1761,34 @@ class Fighter {
 
   attack() {
     if (this.attackCooldown > 0 || this.attacking) return;
+    const def = getFighterSpriteDef(this);
+    let meleeAnim = 'punch';
+    if (!this.isPlayer && this.charName === 'Enemy-Punk' && bossPhase >= 2) {
+      // Weighted random: favor attack 1 because it has more frames/impact.
+      const roll = Math.random();
+      if (roll < 0.5) meleeAnim = 'punch1';
+      else if (roll < 0.68) meleeAnim = 'punch2';
+      else if (roll < 0.84) meleeAnim = 'punch3';
+      else meleeAnim = 'punch4';
+      if (!def.animations[meleeAnim]) meleeAnim = 'punch1';
+    }
+    const animDef = def.animations[meleeAnim] || def.animations.punch1 || def.animations.punch;
+
     this.attacking = true;
     this.attackFrame = 0;
+    this.activeMeleeAnim = meleeAnim;
+    this.attackAnimDuration = Math.max(8, animDef.count * animDef.speed - 1);
     this.hitLanded = false;
     this.attackCooldown = ATTACK_COOLDOWN;
-    sndPunch();
+    if (this.isPlayer) sndPunchP1();
+    else sndPunch();
   }
 
   jump() {
     if (!this.onGround) return;
     this.vy = JUMP_VEL;
-    sndJump();
+    if (this.isPlayer) sndP1JumpSfx();
+    else sndJump();
   }
 
   recordBack(frameCount) {
@@ -697,7 +1824,29 @@ class Fighter {
     this.dashing = true;
     this.dashTimer = DASH_DURATION;
     this.dashDir = this.facingRight ? 1 : -1;
+    this.dashStrikeActive = false;
+    this.dashStrikeTimer = 0;
+    this.dashStrikeHitDone = false;
     this.dashCooldown = DASH_COOLDOWN;
+    if (!this.isPlayer) this.bossDashHitDone = false;
+    if (!this.isPlayer && bossPhase >= 2) sndBossPhase2DashSfx();
+    else sndDashWhoosh();
+  }
+
+  startDashStrike() {
+    if (!this.isPlayer) return false;
+    if (!this.dashing) return false;
+    if (this.dashStrikeActive) return false;
+    if (this.dashStrikeCooldown > 0) return false;
+    this.dashStrikeActive = true;
+    this.dashStrikeTimer = DASH_STRIKE_DURATION;
+    this.dashTimer = Math.max(this.dashTimer, DASH_STRIKE_DURATION);
+    this.dashStrikeHitDone = false;
+    this.dashStrikeCooldown = DASH_STRIKE_COOLDOWN;
+    this.forcedAnim = null;
+    this.forcedAnimTimer = 0;
+    sndSpecial();
+    return true;
   }
 
   fireSpecial() {
@@ -707,7 +1856,8 @@ class Fighter {
     const px = this.facingRight ? this.x + this.w + 10 : this.x - 10;
     const py = this.y;
     projectiles.push(new Projectile(px, py, this.facingRight, this));
-    sndSpecial();
+    if (this.isPlayer) sndP1ProjectileSfx();
+    else sndSpecial();
   }
 
   recordBackFwd(frameCount, type) {
@@ -743,22 +1893,43 @@ class Fighter {
     this.groundWaveCooldown = GROUND_WAVE_COOLDOWN;
     const gx = this.facingRight ? this.x + this.w + 4 : this.x - 4;
     groundWaves.push(new GroundWave(gx, this, this.facingRight));
-    sndSpecial();
+    if (this.isPlayer) sndP1GroundWaveSfx();
+    else sndSpecial();
+    return true;
+  }
+
+  fireCyberJumpTrail() {
+    if (!this.isPlayer) return false;
+    if (this.cyberJumpCooldown > 0) return false;
+
+    this.cyberJumpCooldown = CYBER_JUMP_COOLDOWN;
+    this.cyberJumpTrailTimer = CYBER_JUMP_TRAIL_DURATION;
+    this.vy = JUMP_VEL * 0.82;
+    this.forcedAnim = null;
+    this.forcedAnimTimer = 0;
+    sndP1CyberJumpSfx();
+    for (let i = 0; i < 4; i++) spawnP1CyberJumpBolt(this);
+    cyberGroundSurges.push(new CyberGroundSurge(this.x + this.w / 2, this.facingRight));
     return true;
   }
 
   takeHit(damage) {
     this.health -= damage;
     if (this.health < 0) this.health = 0;
-    const def = SPRITE_DEFS[this.charName];
+    const def = getFighterSpriteDef(this);
     const hurtAnim = def?.animations?.hurt;
     // Keep hurt state long enough to display all hurt frames.
     this.hitFlicker = hurtAnim ? Math.max(10, hurtAnim.count * hurtAnim.speed + 2) : 10;
-    sndHit();
+    if (this.isPlayer) sndP1HitSfx();
+    else sndHit();
   }
 
   triggerAnim(animName) {
-    const def = SPRITE_DEFS[this.charName];
+    if (!this.isPlayer && this.charName === 'Enemy-Punk' && bossPhase >= 2 && animName === 'shot') {
+      // Phase 2: avoid legacy shot fallback sprite.
+      animName = 'punch1';
+    }
+    const def = getFighterSpriteDef(this);
     const anim = def?.animations?.[animName];
     if (!anim) return;
     this.forcedAnim = animName;
@@ -766,7 +1937,7 @@ class Fighter {
   }
 
   queueRangedShot(dirRight) {
-    const def = SPRITE_DEFS[this.charName];
+    const def = getFighterSpriteDef(this);
     const shotAnim = def?.animations?.shot;
     this.queuedProjectileDirRight = !!dirRight;
     this.queuedProjectileTimer = shotAnim ? Math.max(4, Math.floor(shotAnim.count * shotAnim.speed * 0.62)) : 8;
@@ -781,7 +1952,7 @@ class Fighter {
     const dh = sh * SPRITE_SCALE;
     const centerX = posX + w / 2;
     const dY = posY + h - dh;
-    const def = SPRITE_DEFS[this.charName];
+    const def = getFighterSpriteDef(this);
     const needsFlip = fRight !== def.defaultFacingRight;
 
     ctx.save();
@@ -799,7 +1970,7 @@ class Fighter {
   render(ctx) {
     // Afterimages (echo) — sprite copies with fade
     this.afterimages.forEach(a => {
-      const ghostSprite = getSprite(this.charName, a.anim, a.frame);
+      const ghostSprite = getFighterSprite(this, a.anim, a.frame);
       if (!ghostSprite || !ghostSprite.complete) return;
       const sw = ghostSprite.naturalWidth;
       const sh = ghostSprite.naturalHeight;
@@ -807,7 +1978,7 @@ class Fighter {
       const dh = sh * SPRITE_SCALE;
       const gx = a.x + a.w / 2;
       const gy = a.y + a.h - dh;
-      const def = SPRITE_DEFS[this.charName];
+      const def = getFighterSpriteDef(this);
       const flip = a.facingRight !== def.defaultFacingRight;
 
       ctx.save();
@@ -825,7 +1996,7 @@ class Fighter {
     });
 
     // Main sprite
-    const sprite = getSprite(this.charName, this.currentAnim, this.spriteFrame);
+    const sprite = getFighterSprite(this, this.currentAnim, this.spriteFrame);
 
     ctx.save();
     if (!this.isPlayer && bossImploding) {
@@ -855,122 +2026,31 @@ class Fighter {
     const cx = this.x + this.w / 2;
     const drawY = this.y + this.h - dh;
 
-    const def = SPRITE_DEFS[this.charName];
+    const def = getFighterSpriteDef(this);
     const needsFlip = this.facingRight !== def.defaultFacingRight;
 
     if (needsFlip) {
       ctx.translate(cx, drawY);
       ctx.scale(-1, 1);
       ctx.drawImage(sprite, -dw / 2, 0, dw, dh);
-      if (this.isPlayer && isP1Berserker()) {
-        const pulse = 0.55 + 0.45 * Math.sin(bgOffset * 0.18);
-        const pulse2 = 0.5 + 0.5 * Math.sin(bgOffset * 0.31 + 1.1);
-        // Chromatic edge aura without rectangular overlays.
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.strokeStyle = `rgba(255,70,170,${0.28 + 0.18 * pulse2})`;
-        ctx.lineWidth = 2;
-        ctx.shadowColor = '#ff2bcf';
-        ctx.shadowBlur = 10;
-        ctx.beginPath();
-        ctx.ellipse(0, dh * 0.55, dw * 0.42, dh * 0.47, 0, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.strokeStyle = `rgba(0,255,255,${0.22 + 0.16 * pulse2})`;
-        ctx.shadowColor = '#00ffff';
-        ctx.beginPath();
-        ctx.ellipse(0, dh * 0.55, dw * 0.38, dh * 0.43, 0, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-
-        const aura = ctx.createRadialGradient(0, dh * 0.55, 10, 0, dh * 0.55, dw * 0.78);
-        aura.addColorStop(0, `rgba(255,40,190,${0.3 * pulse})`);
-        aura.addColorStop(0.55, `rgba(130,0,235,${0.25 * pulse})`);
-        aura.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.globalCompositeOperation = 'screen';
-        ctx.fillStyle = aura;
-        ctx.fillRect(-dw * 0.9, -dh * 0.1, dw * 1.8, dh * 1.3);
-
-        // Scanline glitch on top of sprite (no rectangle frame).
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = `rgba(0,255,255,${0.15 + 0.12 * pulse})`;
-        for (let i = 0; i < 5; i++) {
-          const sy = 5 + ((bgOffset * 4 + i * 9) % Math.max(12, dh - 12));
-          ctx.fillRect(-dw / 2 + 4, sy, dw - 8, 1);
-        }
-
-        // Ground energy ring + sparks around feet.
-        const feetY = dh - 4;
-        ctx.strokeStyle = `rgba(255,80,220,${0.4 + 0.35 * pulse})`;
-        ctx.lineWidth = 1.5;
-        ctx.shadowColor = '#ff2bcf';
-        ctx.shadowBlur = 12;
-        ctx.beginPath();
-        ctx.ellipse(0, feetY, dw * (0.23 + 0.02 * pulse2), 6 + 2 * pulse, 0, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-        for (let i = 0; i < 6; i++) {
-          const a = (Math.PI * 2 / 6) * i + bgOffset * 0.06;
-          const sx = Math.cos(a) * (dw * 0.18);
-          const sy = feetY + Math.sin(a) * 4;
-          const ss = 1.5 + (i % 2);
-          ctx.fillStyle = i % 2 ? 'rgba(255,90,200,0.75)' : 'rgba(0,255,255,0.65)';
-          ctx.fillRect(sx, sy, ss, ss);
-        }
-      }
     } else {
       ctx.drawImage(sprite, cx - dw / 2, drawY, dw, dh);
-      if (this.isPlayer && isP1Berserker()) {
-        const pulse = 0.55 + 0.45 * Math.sin(bgOffset * 0.18);
-        const pulse2 = 0.5 + 0.5 * Math.sin(bgOffset * 0.31 + 1.1);
-        // Chromatic edge aura without rectangular overlays.
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.strokeStyle = `rgba(255,70,170,${0.28 + 0.18 * pulse2})`;
-        ctx.lineWidth = 2;
-        ctx.shadowColor = '#ff2bcf';
-        ctx.shadowBlur = 10;
-        ctx.beginPath();
-        ctx.ellipse(cx, drawY + dh * 0.55, dw * 0.42, dh * 0.47, 0, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.strokeStyle = `rgba(0,255,255,${0.22 + 0.16 * pulse2})`;
-        ctx.shadowColor = '#00ffff';
-        ctx.beginPath();
-        ctx.ellipse(cx, drawY + dh * 0.55, dw * 0.38, dh * 0.43, 0, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
+    }
 
-        const aura = ctx.createRadialGradient(cx, drawY + dh * 0.55, 10, cx, drawY + dh * 0.55, dw * 0.78);
-        aura.addColorStop(0, `rgba(255,40,190,${0.3 * pulse})`);
-        aura.addColorStop(0.55, `rgba(130,0,235,${0.25 * pulse})`);
-        aura.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.globalCompositeOperation = 'screen';
-        ctx.fillStyle = aura;
+    if (this.isPlayer && this.dashStrikeActive) {
+      const pulse = 0.55 + 0.45 * Math.sin(bgOffset * 0.6);
+      const ex = needsFlip ? 0 : cx;
+      const ey = needsFlip ? dh * 0.55 : drawY + dh * 0.55;
+      const aura = ctx.createRadialGradient(ex, ey, 8, ex, ey, Math.max(dw, dh) * 0.72);
+      aura.addColorStop(0, `rgba(217,255,47,${0.32 + pulse * 0.18})`);
+      aura.addColorStop(0.45, `rgba(57,255,143,${0.2 + pulse * 0.14})`);
+      aura.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = aura;
+      if (needsFlip) {
+        ctx.fillRect(-dw * 0.9, -dh * 0.1, dw * 1.8, dh * 1.3);
+      } else {
         ctx.fillRect(cx - dw * 0.9, drawY - dh * 0.1, dw * 1.8, dh * 1.3);
-
-        // Scanline glitch on top of sprite (no rectangle frame).
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = `rgba(0,255,255,${0.15 + 0.12 * pulse})`;
-        for (let i = 0; i < 5; i++) {
-          const sy = drawY + 5 + ((bgOffset * 4 + i * 9) % Math.max(12, dh - 12));
-          ctx.fillRect(cx - dw / 2 + 4, sy, dw - 8, 1);
-        }
-
-        // Ground energy ring + sparks around feet.
-        const feetY = drawY + dh - 4;
-        ctx.strokeStyle = `rgba(255,80,220,${0.4 + 0.35 * pulse})`;
-        ctx.lineWidth = 1.5;
-        ctx.shadowColor = '#ff2bcf';
-        ctx.shadowBlur = 12;
-        ctx.beginPath();
-        ctx.ellipse(cx, feetY, dw * (0.23 + 0.02 * pulse2), 6 + 2 * pulse, 0, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-        for (let i = 0; i < 6; i++) {
-          const a = (Math.PI * 2 / 6) * i + bgOffset * 0.06;
-          const sx = cx + Math.cos(a) * (dw * 0.18);
-          const sy = feetY + Math.sin(a) * 4;
-          const ss = 1.5 + (i % 2);
-          ctx.fillStyle = i % 2 ? 'rgba(255,90,200,0.75)' : 'rgba(0,255,255,0.65)';
-          ctx.fillRect(sx, sy, ss, ss);
-        }
       }
     }
 
@@ -1112,8 +2192,8 @@ class Projectile {
       return;
     }
 
-    const coreColor = isPlayer ? '#00ffff' : '#ff00ff';
-    const glowColor = isPlayer ? 'rgba(0,255,255,' : 'rgba(255,0,255,';
+    const coreColor = isPlayer ? P1_NEON_PRIMARY : P2_NEON_PRIMARY;
+    const glowColor = isPlayer ? 'rgba(57,255,143,' : 'rgba(255,77,217,';
     const trailDir = this.dirRight ? -1 : 1;
 
     // Digital data trail (katakana stream behind projectile)
@@ -1277,8 +2357,8 @@ class GroundWave {
       const tx = headX + trailDir * i * 14;
       const ta = alpha * (1 - i / 8) * 0.3;
       const g = ctx.createRadialGradient(tx, GROUND_Y - 2, 0, tx, GROUND_Y - 2, 18 + i * 2);
-      g.addColorStop(0, `rgba(190,70,255,${ta * 1.2})`);
-      g.addColorStop(0.5, `rgba(135,40,235,${ta})`);
+      g.addColorStop(0, `rgba(217,255,47,${ta * 1.2})`);
+      g.addColorStop(0.5, `rgba(57,255,143,${ta})`);
       g.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = g;
       ctx.beginPath();
@@ -1288,15 +2368,15 @@ class GroundWave {
 
     // Main vertical wave column (similar to boss phase 2 wave)
     const colGrad = ctx.createLinearGradient(headX, GROUND_Y, headX, topY);
-    colGrad.addColorStop(0, `rgba(170,50,255,${0.65 * alpha})`);
-    colGrad.addColorStop(0.45, `rgba(215,120,255,${0.38 * alpha})`);
-    colGrad.addColorStop(1, 'rgba(130,0,255,0)');
+    colGrad.addColorStop(0, `rgba(217,255,47,${0.65 * alpha})`);
+    colGrad.addColorStop(0.45, `rgba(120,255,170,${0.38 * alpha})`);
+    colGrad.addColorStop(1, 'rgba(40,220,90,0)');
     ctx.fillStyle = colGrad;
     ctx.fillRect(headX - this.w / 2, topY, this.w, this.h);
 
-    ctx.shadowColor = '#a200ff';
+    ctx.shadowColor = '#9dff3a';
     ctx.shadowBlur = 16;
-    ctx.strokeStyle = `rgba(228,150,255,${0.55 * alpha})`;
+    ctx.strokeStyle = `rgba(231,255,150,${0.55 * alpha})`;
     ctx.lineWidth = 2.2;
     ctx.beginPath();
     ctx.moveTo(headX - this.w / 2, GROUND_Y);
@@ -1306,7 +2386,7 @@ class GroundWave {
     ctx.stroke();
 
     // Inner wave ribbons
-    ctx.strokeStyle = `rgba(255,180,255,${0.4 * alpha})`;
+    ctx.strokeStyle = `rgba(200,255,180,${0.4 * alpha})`;
     ctx.lineWidth = 1.2;
     for (let r = 0; r < 3; r++) {
       const ox = (r - 1) * 9;
@@ -1329,8 +2409,8 @@ class GroundWave {
       const sy = GROUND_Y - this.h * t - Math.sin(this.life * 0.22 + s.phase) * s.amp;
       const sz = 2 + (i % 4);
       ctx.fillStyle = i % 2 === 0
-        ? `rgba(242,160,255,${0.45 * alpha})`
-        : `rgba(180,255,255,${0.36 * alpha})`;
+        ? `rgba(240,255,140,${0.45 * alpha})`
+        : `rgba(120,255,170,${0.36 * alpha})`;
       ctx.fillRect(sx - sz / 2, sy - sz / 2, sz, sz);
     });
 
@@ -1338,8 +2418,8 @@ class GroundWave {
     const crestR = 10 + pulse * 4;
     const crest = ctx.createRadialGradient(headX, topY, 0, headX, topY, crestR);
     crest.addColorStop(0, `rgba(255,255,255,${0.85 * alpha})`);
-    crest.addColorStop(0.35, `rgba(240,130,255,${0.7 * alpha})`);
-    crest.addColorStop(1, 'rgba(150,0,255,0)');
+    crest.addColorStop(0.35, `rgba(230,255,120,${0.7 * alpha})`);
+    crest.addColorStop(1, 'rgba(60,220,90,0)');
     ctx.fillStyle = crest;
     ctx.beginPath();
     ctx.arc(headX, topY, crestR, 0, Math.PI * 2);
@@ -1406,15 +2486,19 @@ class EnergyField {
         const dy = (target.y + target.h / 2) - this.cy;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < this.radius + 30) {
-          const burstDmg = this.owner === player ? scaleP1Damage(BURST_DAMAGE) : BURST_DAMAGE;
-          target.takeHit(burstDmg);
-          if (this.owner === player) superMeter = Math.min(SUPER_MAX, superMeter + 10);
-          const pushDir = dx > 0 ? 1 : -1;
-          target.x += pushDir * BURST_KNOCKBACK * 6;
-          target.vy = -6;
-          if (target.x < 10) target.x = 10;
-          if (target.x > W - target.w - 10) target.x = W - target.w - 10;
-          this.hitDone = true;
+          if (this.owner === player && target === enemy && enemyBossDashIntangible()) {
+            /* dash: intangível ao burst */
+          } else {
+            const burstDmg = this.owner === player ? scaleP1Damage(BURST_DAMAGE) : BURST_DAMAGE;
+            target.takeHit(burstDmg);
+            if (this.owner === player) superMeter = Math.min(SUPER_MAX, superMeter + 10);
+            const pushDir = dx > 0 ? 1 : -1;
+            target.x += pushDir * BURST_KNOCKBACK * 6;
+            target.vy = -6;
+            if (target.x < 10) target.x = 10;
+            if (target.x > W - target.w - 10) target.x = W - target.w - 10;
+            this.hitDone = true;
+          }
         }
       }
     }
@@ -1678,11 +2762,11 @@ class BossTrap {
       }
 
       // Helper label for P1: subtle cyberpunk glitch text above trap
-      const labelY = cy - 28 - Math.sin(t * 0.1) * 1.5;
-      const jitterX = (Math.random() - 0.5) * 1.2;
-      const textAlpha = 0.58 * alpha;
+      const labelY = cy - 40 - Math.sin(t * 0.1) * 2;
+      const jitterX = (Math.random() - 0.5) * 1.6;
+      const textAlpha = 0.62 * alpha;
       ctx.textAlign = 'center';
-      ctx.font = `bold 9px ${HUD_FONT}`;
+      ctx.font = `bold 15px ${HUD_FONT}`;
       ctx.shadowBlur = 0;
       ctx.fillStyle = `rgba(0,255,255,${textAlpha * 0.5})`;
       ctx.fillText('ARMADILHA', cx - 1 + jitterX, labelY + 0.4);
@@ -2027,50 +3111,15 @@ class BossEnergyRain {
 }
 
 function sndBossShoot() {
-  if (!audioCtx) return;
-  const t = audioCtx.currentTime;
-  const o = audioCtx.createOscillator();
-  const g = audioCtx.createGain();
-  o.connect(g); g.connect(audioCtx.destination);
-  o.type = 'sawtooth';
-  o.frequency.setValueAtTime(250, t);
-  o.frequency.exponentialRampToValueAtTime(80, t + 0.25);
-  g.gain.setValueAtTime(0.12, t);
-  g.gain.exponentialRampToValueAtTime(0.01, t + 0.25);
-  o.start(t); o.stop(t + 0.25);
+  sndBossProjectileSfx();
 }
 
 function sndBossWave() {
-  if (!audioCtx) return;
-  const t = audioCtx.currentTime;
-  const o = audioCtx.createOscillator();
-  const g = audioCtx.createGain();
-  o.connect(g); g.connect(audioCtx.destination);
-  o.type = 'square';
-  o.frequency.setValueAtTime(100, t);
-  o.frequency.exponentialRampToValueAtTime(40, t + 0.4);
-  g.gain.setValueAtTime(0.15, t);
-  g.gain.exponentialRampToValueAtTime(0.01, t + 0.4);
-  o.start(t); o.stop(t + 0.4);
+  sndBossGroundPowerSfx();
 }
 
 function sndBossRain() {
-  if (!audioCtx) return;
-  const t = audioCtx.currentTime;
-  const o1 = audioCtx.createOscillator();
-  const o2 = audioCtx.createOscillator();
-  const g = audioCtx.createGain();
-  o1.connect(g); o2.connect(g); g.connect(audioCtx.destination);
-  o1.type = 'sine';
-  o1.frequency.setValueAtTime(500, t);
-  o1.frequency.exponentialRampToValueAtTime(150, t + 0.5);
-  o2.type = 'triangle';
-  o2.frequency.setValueAtTime(700, t);
-  o2.frequency.exponentialRampToValueAtTime(200, t + 0.5);
-  g.gain.setValueAtTime(0.08, t);
-  g.gain.exponentialRampToValueAtTime(0.01, t + 0.5);
-  o1.start(t); o2.start(t);
-  o1.stop(t + 0.5); o2.stop(t + 0.5);
+  sndBossProjectileSfx();
 }
 
 // =============================================================================
@@ -2078,6 +3127,7 @@ function sndBossRain() {
 // =============================================================================
 
 function sndP1SuperCharge() {
+  sndP1OverclockLayerSfx();
   if (!audioCtx) return;
   const t = audioCtx.currentTime;
   const o = audioCtx.createOscillator();
@@ -2094,6 +3144,7 @@ function sndP1SuperCharge() {
 }
 
 function sndP1SuperImpact() {
+  sndP1OverclockLayerSfx();
   if (!audioCtx) return;
   const t = audioCtx.currentTime;
   for (let i = 0; i < 3; i++) {
@@ -2186,7 +3237,7 @@ function updateP1Super() {
       h: 3 + Math.random() * 20,
       dx: (Math.random() - 0.5) * 30,
       life: 8 + Math.random() * 8,
-      col: Math.random() < 0.5 ? '#ff00aa' : '#00ffff'
+      col: Math.random() < 0.5 ? P1_NEON_PRIMARY : P1_NEON_SECONDARY
     });
   }
   fx.glitchBars.forEach(g => { g.life--; });
@@ -2196,10 +3247,10 @@ function updateP1Super() {
     r.r = Math.min(r.maxR, r.r + 14 + fx.t * 0.3);
   });
 
-  if (!fx.dealt && fx.t === 50 && player && enemy) {
+    if (!fx.dealt && fx.t === 50 && player && enemy) {
     const pcx = player.x + player.w / 2;
     const ecx = enemy.x + enemy.w / 2;
-    if (Math.abs(ecx - pcx) <= P1_SUPER_AOE_RADIUS) {
+    if (Math.abs(ecx - pcx) <= P1_SUPER_AOE_RADIUS && !enemyBossDashIntangible()) {
       const raw = Math.floor(enemy.maxHealth * P1_SUPER_HP_FRACTION) + P1_SUPER_FLAT;
       const dmg = Math.min(95, Math.max(40, scaleP1Damage(raw)));
       enemy.takeHit(dmg);
@@ -2231,9 +3282,9 @@ function renderP1Super(ctx) {
 
   // Expanding rings from player
   fx.rings.forEach((r, i) => {
-    ctx.strokeStyle = `rgba(0,255,255,${r.alpha * (1 - prog) * 0.5})`;
+    ctx.strokeStyle = `rgba(217,255,47,${r.alpha * (1 - prog) * 0.5})`;
     ctx.lineWidth = 2;
-    ctx.shadowColor = '#0ff';
+    ctx.shadowColor = P1_NEON_PRIMARY;
     ctx.shadowBlur = 12;
     ctx.beginPath();
     ctx.arc(pcx, pcy, Math.min(r.r, r.maxR), 0, Math.PI * 2);
@@ -2244,7 +3295,7 @@ function renderP1Super(ctx) {
   // Huge AOE preview (faint)
   if (t < 55) {
     const aoeA = 0.15 + 0.1 * Math.sin(t * 0.2);
-    ctx.strokeStyle = `rgba(255,0,200,${aoeA})`;
+    ctx.strokeStyle = `rgba(57,255,143,${aoeA})`;
     ctx.lineWidth = 2;
     ctx.setLineDash([8, 8]);
     ctx.beginPath();
@@ -2255,9 +3306,9 @@ function renderP1Super(ctx) {
 
   // Lightning bolts
   fx.bolts.forEach(b => {
-    ctx.strokeStyle = `rgba(0,255,255,${0.4 + 0.3 * Math.sin(t * 0.3 + b.phase)})`;
+    ctx.strokeStyle = `rgba(217,255,47,${0.4 + 0.3 * Math.sin(t * 0.3 + b.phase)})`;
     ctx.lineWidth = b.w;
-    ctx.shadowColor = '#0ff';
+    ctx.shadowColor = P1_NEON_PRIMARY;
     ctx.shadowBlur = 10;
     ctx.beginPath();
     ctx.moveTo(b.x, b.y);
@@ -2282,14 +3333,14 @@ function renderP1Super(ctx) {
   // Particles
   fx.particles.forEach(p => {
     ctx.globalAlpha = Math.min(1, p.life / 30);
-    ctx.fillStyle = Math.random() < 0.5 ? '#0ff' : '#f0f';
+    ctx.fillStyle = Math.random() < 0.5 ? P1_NEON_PRIMARY : P1_NEON_SECONDARY;
     ctx.fillRect(p.x, p.y, p.size, p.size);
   });
   ctx.globalAlpha = 1;
 
   // Hex grid fragment
   if (t > 20) {
-    ctx.strokeStyle = `rgba(0,255,200,${0.15 * (1 - prog * 0.5)})`;
+    ctx.strokeStyle = `rgba(57,255,143,${0.15 * (1 - prog * 0.5)})`;
     ctx.lineWidth = 0.5;
     const gs = 40;
     for (let gx = 0; gx < W + gs; gx += gs) {
@@ -2306,8 +3357,8 @@ function renderP1Super(ctx) {
     ctx.fillStyle = `rgba(255,255,255,${0.5 * flash})`;
     ctx.fillRect(0, 0, W, H);
     const ringGrad = ctx.createRadialGradient(pcx, pcy, 0, pcx, pcy, P1_SUPER_AOE_RADIUS);
-    ringGrad.addColorStop(0, `rgba(0,255,255,${0.45 * flash})`);
-    ringGrad.addColorStop(0.4, `rgba(255,0,255,${0.2 * flash})`);
+    ringGrad.addColorStop(0, `rgba(217,255,47,${0.45 * flash})`);
+    ringGrad.addColorStop(0.4, `rgba(57,255,143,${0.2 * flash})`);
     ringGrad.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = ringGrad;
     ctx.beginPath();
@@ -2321,12 +3372,12 @@ function renderP1Super(ctx) {
   const titleY = 70 + Math.sin(t * 0.08) * 3;
   ctx.font = `bold 22px ${HUD_FONT}`;
   ctx.globalAlpha = 0.4;
-  ctx.fillStyle = '#ff0088';
+  ctx.fillStyle = P1_NEON_PRIMARY;
   ctx.fillText('OVERCLOCK NOVA', W / 2 - 2 + shake, titleY);
-  ctx.fillStyle = '#00ffff';
+  ctx.fillStyle = P1_NEON_SECONDARY;
   ctx.fillText('OVERCLOCK NOVA', W / 2 + 2 + shake, titleY);
   ctx.globalAlpha = 0.85 + 0.15 * Math.sin(t * 0.2);
-  ctx.shadowColor = '#0ff';
+  ctx.shadowColor = P1_NEON_PRIMARY;
   ctx.shadowBlur = 14;
   ctx.fillStyle = '#fff';
   ctx.fillText('OVERCLOCK NOVA', W / 2 + shake, titleY);
@@ -2334,7 +3385,7 @@ function renderP1Super(ctx) {
   ctx.globalAlpha = 1;
 
   ctx.font = `8px ${HUD_FONT}`;
-  ctx.fillStyle = 'rgba(0,255,255,0.5)';
+  ctx.fillStyle = 'rgba(57,255,143,0.5)';
   ctx.fillText('[ SYSTEM LIMITER — DISABLED ]', W / 2 + shake, titleY + 22);
 
   // Scanlines
@@ -2389,9 +3440,13 @@ let aiPreferredRange = 80;
 
 function updateEnemyAI(dt) {
   if (!enemy || state !== 'playing') return;
+  if (enemy.health <= 0) return;
 
   const prevVx = enemy.vx;
-  enemy.vx = 0;
+  if (!enemy.dashing) {
+    enemy.vx = 0;
+  }
+  const isPreparingRangedShot = bossPhase < 2 && enemy.queuedProjectileTimer > 0;
 
   const distX = player.x - enemy.x;
   const absDist = Math.abs(distX);
@@ -2413,13 +3468,18 @@ function updateEnemyAI(dt) {
   if (aiPunishWindow > 0) aiPunishWindow--;
   if (aiDodgeCooldown > 0) aiDodgeCooldown--;
   if (aiFeintTimer > 0) aiFeintTimer--;
+  if (bossPhase >= 2 && aiP2DashCooldown > 0) aiP2DashCooldown--;
+
+  aiAttackTimer--;
+  aiRangedTimer--;
+  aiJumpTimer--;
 
   // Determine preferred fighting range based on health and phase
   if (bossPhase >= 2) {
     aiPreferredRange = healthPct > 0.5 ? 130 : healthPct > 0.25 ? 110 : 90;
   } else {
-    // Phase 1: keep more mid-range spacing; don't glue to P1.
-    aiPreferredRange = healthPct > 0.6 ? 140 : healthPct > 0.3 ? 125 : 105;
+    // Phase 1: shorter preferred range to pressure P1 more often.
+    aiPreferredRange = healthPct > 0.6 ? 130 : healthPct > 0.3 ? 112 : 95;
   }
 
   // State machine transitions
@@ -2448,22 +3508,22 @@ function updateEnemyAI(dt) {
     } else {
       if (aiPunishWindow > 0) {
         aiState = 'punish';
-        aiStateTimer = 25 + Math.random() * 15;
+        aiStateTimer = 20 + Math.random() * 12;
       } else if (healthPct < 0.2) {
-        aiState = roll < 0.5 ? 'aggressive' : roll < 0.75 ? 'retreat' : 'bait';
-        aiStateTimer = 40 + Math.random() * 30;
+        aiState = roll < 0.62 ? 'aggressive' : roll < 0.82 ? 'retreat' : 'bait';
+        aiStateTimer = 32 + Math.random() * 24;
       } else if (healthPct < 0.5) {
-        aiState = roll < 0.3 ? 'aggressive' : roll < 0.5 ? 'circle' : roll < 0.7 ? 'bait' : 'chase';
-        aiStateTimer = 50 + Math.random() * 60;
+        aiState = roll < 0.4 ? 'aggressive' : roll < 0.62 ? 'circle' : roll < 0.82 ? 'chase' : 'bait';
+        aiStateTimer = 38 + Math.random() * 46;
       } else if (playerHealthPct < 0.4) {
-        aiState = roll < 0.6 ? 'aggressive' : 'chase';
-        aiStateTimer = 60 + Math.random() * 40;
+        aiState = roll < 0.75 ? 'aggressive' : 'chase';
+        aiStateTimer = 46 + Math.random() * 30;
       } else if (absDist < 60) {
-        aiState = roll < 0.3 ? 'retreat' : roll < 0.5 ? 'circle' : roll < 0.8 ? 'aggressive' : 'bait';
-        aiStateTimer = 40 + Math.random() * 50;
+        aiState = roll < 0.2 ? 'retreat' : roll < 0.45 ? 'circle' : roll < 0.86 ? 'aggressive' : 'bait';
+        aiStateTimer = 34 + Math.random() * 38;
       } else {
-        aiState = roll < 0.35 ? 'chase' : roll < 0.6 ? 'circle' : roll < 0.8 ? 'aggressive' : 'bait';
-        aiStateTimer = 60 + Math.random() * 80;
+        aiState = roll < 0.44 ? 'chase' : roll < 0.66 ? 'circle' : roll < 0.9 ? 'aggressive' : 'bait';
+        aiStateTimer = 44 + Math.random() * 60;
       }
     }
   }
@@ -2475,6 +3535,7 @@ function updateEnemyAI(dt) {
 
   aiMeleeCommitTimer--;
 
+  if (!enemy.dashing) {
   if (aiState === 'chase') {
     if (absDist > aiPreferredRange) {
       enemy.vx = dirToPlayer * aiSpeed;
@@ -2520,10 +3581,12 @@ function updateEnemyAI(dt) {
   } else if (aiState === 'aggressive') {
     if (bossPhase < 2 && aiMeleeCommitTimer <= 0) {
       // In phase 1, only close in during short commit windows.
-      if (Math.random() < 0.035 && absDist < 170) {
-        aiMeleeCommitTimer = 28 + Math.random() * 18;
-      } else if (absDist < 120) {
-        enemy.vx = -dirToPlayer * aiSpeed * 0.45;
+      if (Math.random() < 0.075 && absDist < 190) {
+        aiMeleeCommitTimer = 34 + Math.random() * 24;
+      } else if (absDist < 95) {
+        enemy.vx = -dirToPlayer * aiSpeed * 0.3;
+      } else if (absDist < 150) {
+        enemy.vx = dirToPlayer * aiSpeed * 0.85;
       }
     }
 
@@ -2554,16 +3617,20 @@ function updateEnemyAI(dt) {
 
   // Phase 1 only: smooth horizontal acceleration to reduce twitchy movement.
   if (bossPhase < 2 && enemy.onGround) {
-    const maxStep = aiSpeed * 0.22;
+    const maxStep = aiSpeed * 0.34;
     const delta = enemy.vx - prevVx;
     if (delta > maxStep) enemy.vx = prevVx + maxStep;
     else if (delta < -maxStep) enemy.vx = prevVx - maxStep;
     if (Math.abs(enemy.vx) < 0.05) enemy.vx = 0;
   }
 
+  // Keep phase 1 boss stationary while shot animation is active.
+  if (isPreparingRangedShot) {
+    enemy.vx = 0;
+  }
+
   // Attack logic — varies by state and distance
-  aiAttackTimer--;
-  if (aiAttackTimer <= 0 && !enemy.attacking) {
+  if (!isPreparingRangedShot && aiAttackTimer <= 0 && !enemy.attacking) {
     let shouldAttack = false;
     let nextCooldown = 90;
 
@@ -2590,13 +3657,13 @@ function updateEnemyAI(dt) {
 
     if (shouldAttack) {
       enemy.attack();
-      aiAttackTimer = bossPhase >= 2 ? nextCooldown * 0.65 : nextCooldown;
+      aiAttackTimer = bossPhase >= 2 ? nextCooldown * 0.65 : nextCooldown * 0.82;
       if (bossPhase < 2) aiMeleeCommitTimer = 0;
     }
   }
 
   // Phase 2 anti-stall: if too close and not attacking, force quick reposition.
-  if (bossPhase >= 2 && !enemy.attacking && absDist < 24) {
+  if (!isPreparingRangedShot && bossPhase >= 2 && !enemy.attacking && absDist < 24) {
     enemy.vx = -dirToPlayer * aiSpeed * 1.1;
     if (aiState !== 'retreat' && Math.random() < 0.2) {
       aiState = 'retreat';
@@ -2605,22 +3672,21 @@ function updateEnemyAI(dt) {
   }
 
   // Phase 1 ranged pressure: boss occasionally shoots at medium/long range.
-  aiRangedTimer--;
   if (bossPhase < 2 && aiRangedTimer <= 0 && !enemy.attacking && enemy.onGround) {
     const hasClearRange = absDist > 130 && absDist < 320;
     const lowProjectileDensity = projectiles.filter(p => p.owner === enemy && p.alive).length < 1;
-    if (hasClearRange && lowProjectileDensity && Math.random() < 0.75) {
+    if (hasClearRange && lowProjectileDensity && Math.random() < 0.62) {
       enemy.queueRangedShot(enemy.facingRight);
-      aiRangedTimer = 95 + Math.random() * 65;
+      aiRangedTimer = 120 + Math.random() * 85;
     } else {
-      aiRangedTimer = 28 + Math.random() * 20;
+      aiRangedTimer = 22 + Math.random() * 16;
     }
   }
 
   // Reactive dodge — jump or backstep when player attacks
-  if (player.attacking && absDist < 95 && aiDodgeCooldown <= 0) {
+  if (!isPreparingRangedShot && player.attacking && absDist < 95 && aiDodgeCooldown <= 0) {
     const dodgeRoll = Math.random();
-    if (dodgeRoll < 0.25 && enemy.onGround) {
+    if (bossPhase >= 2 && dodgeRoll < 0.25 && enemy.onGround) {
       // Jump dodge
       enemy.jump();
       aiDodgeCooldown = 40;
@@ -2636,12 +3702,17 @@ function updateEnemyAI(dt) {
     if (!proj.alive || proj.owner !== player) continue;
     const projDist = Math.abs(proj.x - enemy.x);
     const projApproaching = proj.dirRight ? (proj.x < enemy.x) : (proj.x > enemy.x);
-    if (projDist < 120 && projApproaching && enemy.onGround && aiDodgeCooldown <= 0) {
+    if (!isPreparingRangedShot && projDist < 120 && projApproaching && enemy.onGround && aiDodgeCooldown <= 0) {
       // Do not always dodge projectiles: add reaction chance.
       const dodgeChance = bossPhase >= 2 ? 0.62 : 0.45;
       if (Math.random() < dodgeChance) {
-        enemy.jump();
-        aiDodgeCooldown = 50;
+        if (bossPhase >= 2) {
+          enemy.jump();
+          aiDodgeCooldown = 50;
+        } else {
+          enemy.vx = -dirToPlayer * aiSpeed * 1.2;
+          aiDodgeCooldown = 28;
+        }
       } else {
         // Small hesitation window so the AI doesn't re-roll every frame.
         aiDodgeCooldown = 18;
@@ -2651,8 +3722,7 @@ function updateEnemyAI(dt) {
   }
 
   // Strategic jump
-  aiJumpTimer--;
-  if (aiJumpTimer <= 0 && enemy.onGround) {
+  if (!isPreparingRangedShot && bossPhase >= 2 && aiJumpTimer <= 0 && enemy.onGround) {
     if (aiState === 'aggressive' && absDist > 90 && absDist < 180) {
       // Jump-in attack
       enemy.jump();
@@ -2670,8 +3740,25 @@ function updateEnemyAI(dt) {
     }
   }
 
+  } // !enemy.dashing (movement / melee / jumps)
+
   // Face player
   enemy.facingRight = distX > 0;
+
+  // Fase 2: investida (dash) em média distância
+  if (
+    bossPhase >= 2 &&
+    !enemy.dashing &&
+    !enemy.attacking &&
+    enemy.onGround &&
+    enemy.stunTimer <= 0 &&
+    aiP2DashCooldown <= 0
+  ) {
+    if (absDist > 72 && absDist < 300 && Math.random() < 0.42) {
+      enemy.startDash();
+      aiP2DashCooldown = 85 + Math.random() * 55;
+    }
+  }
 
   // Phase 2: spawn ground traps
   if (bossPhase >= 2) {
@@ -2694,18 +3781,18 @@ function updateEnemyAI(dt) {
         bossPowers.push(new BossProjectile(px, py, enemy.facingRight));
         enemy.triggerAnim('shot');
         sndBossShoot();
-        bossPowerTimer = BOSS_POWER_COOLDOWN * 0.6;
+        bossPowerTimer = BOSS_POWER_COOLDOWN * 0.48;
       } else if (powerRoll < 0.65) {
         // Ground wave from boss position
         bossPowers.push(new BossGroundWave(enemy.x + enemy.w / 2, true));
         bossPowers.push(new BossGroundWave(enemy.x + enemy.w / 2, false));
         sndBossWave();
-        bossPowerTimer = BOSS_POWER_COOLDOWN;
+        bossPowerTimer = BOSS_POWER_COOLDOWN * 0.72;
       } else {
         // Energy rain from sky
         bossPowers.push(new BossEnergyRain());
         sndBossRain();
-        bossPowerTimer = BOSS_POWER_COOLDOWN * 1.3;
+        bossPowerTimer = BOSS_POWER_COOLDOWN * 0.95;
       }
     }
   }
@@ -2719,6 +3806,465 @@ function initAudio() {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
+  ensureP1PunchSfx();
+  ensureDashWhooshSfx();
+  ensureP1ProjectileSfx();
+  ensureP1GroundWaveSfx();
+  ensureP1JumpSfx();
+  ensureP1HitSfx();
+  ensureP1OverclockLayerSfx();
+  ensureBossPhase2DashSfx();
+  ensurePhase2FloatSfx();
+  ensureBossProjectileSfx();
+  ensureBossGroundPowerSfx();
+  ensureTerminalOverlaySfx();
+  ensurePrePhase2ExplosionSfx();
+  ensureFightBgm();
+}
+
+const P1_PUNCH_SFX_URLS = [
+  'assets/fight/SFX/615793__parret__arcade-punch-01.wav',
+  'assets/fight/SFX/615792__parret__arcade-punch-02.wav'
+];
+let p1PunchSfxIndex = 0;
+let p1PunchSfxReady = false;
+const p1PunchSfxPool = [null, null];
+
+function ensureP1PunchSfx() {
+  if (p1PunchSfxReady) return;
+  p1PunchSfxPool[0] = new Audio(P1_PUNCH_SFX_URLS[0]);
+  p1PunchSfxPool[1] = new Audio(P1_PUNCH_SFX_URLS[1]);
+  p1PunchSfxPool.forEach(a => {
+    if (a) a.preload = 'auto';
+  });
+  p1PunchSfxReady = true;
+}
+
+function sndPunchP1() {
+  ensureP1PunchSfx();
+  const a = p1PunchSfxPool[p1PunchSfxIndex % 2];
+  p1PunchSfxIndex++;
+  if (!a) return;
+  a.currentTime = 0;
+  a.volume = 0.88;
+  const p = a.play();
+  if (p && typeof p.catch === 'function') p.catch(() => {});
+}
+
+const DASH_WHOOSH_SFX_URL =
+  'assets/fight/SFX/274211__littlerobotsoundfactory__whoosh_electric_00.wav';
+let dashWhooshAudio = null;
+
+function ensureDashWhooshSfx() {
+  if (dashWhooshAudio) return;
+  dashWhooshAudio = new Audio(DASH_WHOOSH_SFX_URL);
+  dashWhooshAudio.preload = 'auto';
+}
+
+function sndDashWhoosh() {
+  ensureDashWhooshSfx();
+  if (!dashWhooshAudio) return;
+  dashWhooshAudio.currentTime = 0;
+  dashWhooshAudio.volume = 0.78;
+  const p = dashWhooshAudio.play();
+  if (p && typeof p.catch === 'function') p.catch(() => {});
+}
+
+const P1_PROJECTILE_SFX_URL =
+  'assets/fight/SFX/777293__artninja__custom_tiger_claw_ice_laser_sound_12182024.wav';
+let p1ProjectileAudio = null;
+
+function ensureP1ProjectileSfx() {
+  if (p1ProjectileAudio) return;
+  p1ProjectileAudio = new Audio(P1_PROJECTILE_SFX_URL);
+  p1ProjectileAudio.preload = 'auto';
+}
+
+function sndP1ProjectileSfx() {
+  ensureP1ProjectileSfx();
+  if (!p1ProjectileAudio) return;
+  p1ProjectileAudio.currentTime = 0;
+  p1ProjectileAudio.volume = 0.45;
+  const p = p1ProjectileAudio.play();
+  if (p && typeof p.catch === 'function') p.catch(() => {});
+}
+
+const P1_GROUND_WAVE_SFX_URL =
+  'assets/fight/SFX/490303__anomaex__sci-fi_effect_2.wav';
+let p1GroundWaveAudio = null;
+
+function ensureP1GroundWaveSfx() {
+  if (p1GroundWaveAudio) return;
+  p1GroundWaveAudio = new Audio(P1_GROUND_WAVE_SFX_URL);
+  p1GroundWaveAudio.preload = 'auto';
+}
+
+function sndP1GroundWaveSfx() {
+  ensureP1GroundWaveSfx();
+  if (!p1GroundWaveAudio) return;
+  p1GroundWaveAudio.currentTime = 0;
+  p1GroundWaveAudio.volume = 0.68;
+  const p = p1GroundWaveAudio.play();
+  if (p && typeof p.catch === 'function') p.catch(() => {});
+}
+
+const P1_JUMP_SFX_URL = `assets/fight/SFX/${encodeURIComponent(
+  '686986__tailssonic__little-fighter-jump (1).wav'
+)}`;
+let p1JumpAudio = null;
+
+function ensureP1JumpSfx() {
+  if (p1JumpAudio) return;
+  p1JumpAudio = new Audio(P1_JUMP_SFX_URL);
+  p1JumpAudio.preload = 'auto';
+}
+
+function sndP1JumpSfx() {
+  ensureP1JumpSfx();
+  if (!p1JumpAudio) return;
+  p1JumpAudio.currentTime = 0;
+  p1JumpAudio.volume = 0.72;
+  const p = p1JumpAudio.play();
+  if (p && typeof p.catch === 'function') p.catch(() => {});
+}
+
+const P1_HIT_SFX_URL = 'assets/fight/SFX/universfield-punch-03-352040.mp3';
+let p1HitAudio = null;
+
+function ensureP1HitSfx() {
+  if (p1HitAudio) return;
+  p1HitAudio = new Audio(P1_HIT_SFX_URL);
+  p1HitAudio.preload = 'auto';
+}
+
+function sndP1HitSfx() {
+  ensureP1HitSfx();
+  if (!p1HitAudio) return;
+  p1HitAudio.currentTime = 0;
+  p1HitAudio.volume = 0.43;
+  const p = p1HitAudio.play();
+  if (p && typeof p.catch === 'function') p.catch(() => {});
+}
+
+function sndP1CyberJumpSfx() {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const o1 = audioCtx.createOscillator();
+  const o2 = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o1.connect(g); o2.connect(g); g.connect(audioCtx.destination);
+  o1.type = 'sawtooth';
+  o2.type = 'triangle';
+  o1.frequency.setValueAtTime(420, t);
+  o1.frequency.exponentialRampToValueAtTime(160, t + 0.22);
+  o2.frequency.setValueAtTime(760, t);
+  o2.frequency.exponentialRampToValueAtTime(260, t + 0.22);
+  g.gain.setValueAtTime(0.14, t);
+  g.gain.exponentialRampToValueAtTime(0.01, t + 0.24);
+  o1.start(t); o2.start(t);
+  o1.stop(t + 0.24); o2.stop(t + 0.24);
+}
+
+const P1_OVERCLOCK_LAYER_SFX_URLS = [
+  'assets/fight/SFX/828087__audiopapkin__sound-design-elements-impact-sfx-ps-118.wav',
+  'assets/fight/SFX/843655__cat-fox_alex__glitch-fx-impact-2.flac'
+];
+const p1OverclockLayerPool = [null, null];
+let p1OverclockLayerReady = false;
+
+function ensureP1OverclockLayerSfx() {
+  if (p1OverclockLayerReady) return;
+  p1OverclockLayerPool[0] = new Audio(P1_OVERCLOCK_LAYER_SFX_URLS[0]);
+  p1OverclockLayerPool[1] = new Audio(P1_OVERCLOCK_LAYER_SFX_URLS[1]);
+  p1OverclockLayerPool.forEach(a => {
+    if (a) a.preload = 'auto';
+  });
+  p1OverclockLayerReady = true;
+}
+
+function sndP1OverclockLayerSfx() {
+  ensureP1OverclockLayerSfx();
+  const a0 = p1OverclockLayerPool[0];
+  const a1 = p1OverclockLayerPool[1];
+  if (a0) {
+    a0.currentTime = 0;
+    a0.volume = 0.58;
+    const p0 = a0.play();
+    if (p0 && typeof p0.catch === 'function') p0.catch(() => {});
+  }
+  if (a1) {
+    a1.currentTime = 0;
+    a1.volume = 0.52;
+    const p1 = a1.play();
+    if (p1 && typeof p1.catch === 'function') p1.catch(() => {});
+  }
+}
+
+const BOSS_P2_DASH_SFX_URL = 'assets/fight/SFX/316312__littlerobotsoundfactory__robot2_15.wav';
+let bossP2DashAudio = null;
+
+function ensureBossPhase2DashSfx() {
+  if (bossP2DashAudio) return;
+  bossP2DashAudio = new Audio(BOSS_P2_DASH_SFX_URL);
+  bossP2DashAudio.preload = 'auto';
+}
+
+function sndBossPhase2DashSfx() {
+  ensureBossPhase2DashSfx();
+  if (!bossP2DashAudio) return;
+  bossP2DashAudio.currentTime = 0;
+  bossP2DashAudio.volume = 0.74;
+  const p = bossP2DashAudio.play();
+  if (p && typeof p.catch === 'function') p.catch(() => {});
+}
+
+const PHASE2_FLOAT_SFX_URL = 'assets/fight/SFX/397477__theogobbo__pgj-breach.wav';
+let phase2FloatAudio = null;
+
+function ensurePhase2FloatSfx() {
+  if (phase2FloatAudio) return;
+  phase2FloatAudio = new Audio(PHASE2_FLOAT_SFX_URL);
+  phase2FloatAudio.preload = 'auto';
+}
+
+function sndPhase2FloatSfx() {
+  ensurePhase2FloatSfx();
+  if (!phase2FloatAudio) return;
+  phase2FloatAudio.currentTime = 0;
+  phase2FloatAudio.volume = 1;
+  const p = phase2FloatAudio.play();
+  if (p && typeof p.catch === 'function') p.catch(() => {});
+}
+
+const BOSS_PROJECTILE_SFX_URL =
+  'assets/fight/SFX/459615__bolkmar__fx-laser-shoot-c.wav';
+let bossProjectileAudio = null;
+
+function ensureBossProjectileSfx() {
+  if (bossProjectileAudio) return;
+  bossProjectileAudio = new Audio(BOSS_PROJECTILE_SFX_URL);
+  bossProjectileAudio.preload = 'auto';
+}
+
+function sndBossProjectileSfx() {
+  ensureBossProjectileSfx();
+  if (!bossProjectileAudio) return;
+  bossProjectileAudio.currentTime = 0;
+  bossProjectileAudio.volume = 0.68;
+  const p = bossProjectileAudio.play();
+  if (p && typeof p.catch === 'function') p.catch(() => {});
+}
+
+const BOSS_GROUND_POWER_SFX_URL =
+  'assets/fight/SFX/401752__zenithinfinitivestudios__robot_sound.wav';
+let bossGroundPowerAudio = null;
+
+function ensureBossGroundPowerSfx() {
+  if (bossGroundPowerAudio) return;
+  bossGroundPowerAudio = new Audio(BOSS_GROUND_POWER_SFX_URL);
+  bossGroundPowerAudio.preload = 'auto';
+}
+
+function sndBossGroundPowerSfx() {
+  ensureBossGroundPowerSfx();
+  if (!bossGroundPowerAudio) return;
+  bossGroundPowerAudio.currentTime = 0;
+  bossGroundPowerAudio.volume = 0.66;
+  const p = bossGroundPowerAudio.play();
+  if (p && typeof p.catch === 'function') p.catch(() => {});
+}
+
+const TERMINAL_OVERLAY_SFX_URLS = [
+  'assets/fight/SFX/757449__cabled_mess__sci-fi-computing-transmission-01_stereo.wav',
+  `assets/fight/SFX/${encodeURIComponent('493891__crinkem__vintage-hard-drive-read-and-idle (1).wav')}`
+];
+const TERMINAL_OVERLAY_BASE_VOLUMES = [0.46, 0.58];
+const terminalOverlayAudios = [null, null];
+let terminalOverlaySfxReady = false;
+let terminalOverlaySfxPlaying = false;
+let terminalOverlayFadeActive = false;
+let terminalOverlayFadeTimer = 0;
+let terminalOverlayFadeDelay = 0;
+let terminalOverlayFadeDuration = 1;
+let terminalOverlayFinalFadeStarted = false;
+
+function ensureTerminalOverlaySfx() {
+  if (terminalOverlaySfxReady) return;
+  terminalOverlayAudios[0] = new Audio(TERMINAL_OVERLAY_SFX_URLS[0]);
+  terminalOverlayAudios[1] = new Audio(TERMINAL_OVERLAY_SFX_URLS[1]);
+  terminalOverlayAudios.forEach(a => {
+    if (!a) return;
+    a.preload = 'auto';
+    a.loop = true;
+  });
+  terminalOverlaySfxReady = true;
+}
+
+function sndTerminalOverlaySfx() {
+  ensureTerminalOverlaySfx();
+  if (terminalOverlaySfxPlaying) return;
+  terminalOverlaySfxPlaying = true;
+  terminalOverlayFadeActive = false;
+  terminalOverlayFadeTimer = 0;
+  terminalOverlayFinalFadeStarted = false;
+  const a0 = terminalOverlayAudios[0];
+  const a1 = terminalOverlayAudios[1];
+  if (a0) {
+    a0.currentTime = 0;
+    a0.volume = TERMINAL_OVERLAY_BASE_VOLUMES[0];
+    const p0 = a0.play();
+    if (p0 && typeof p0.catch === 'function') p0.catch(() => {});
+  }
+  if (a1) {
+    a1.currentTime = 0;
+    a1.volume = TERMINAL_OVERLAY_BASE_VOLUMES[1];
+    const p1 = a1.play();
+    if (p1 && typeof p1.catch === 'function') p1.catch(() => {});
+  }
+}
+
+function startTerminalOverlayFadeOut(delayFrames = 24, durationFrames = 34) {
+  if (!terminalOverlaySfxPlaying) return;
+  terminalOverlayFadeActive = true;
+  terminalOverlayFadeTimer = 0;
+  terminalOverlayFadeDelay = Math.max(0, delayFrames);
+  terminalOverlayFadeDuration = Math.max(1, durationFrames);
+}
+
+function updateTerminalOverlaySfxFade() {
+  if (!terminalOverlayFadeActive || !terminalOverlaySfxPlaying) return;
+  terminalOverlayFadeTimer++;
+  if (terminalOverlayFadeTimer <= terminalOverlayFadeDelay) return;
+
+  const t = Math.min(
+    1,
+    (terminalOverlayFadeTimer - terminalOverlayFadeDelay) / terminalOverlayFadeDuration
+  );
+  const gain = 1 - t;
+  const a0 = terminalOverlayAudios[0];
+  const a1 = terminalOverlayAudios[1];
+  if (a0) a0.volume = TERMINAL_OVERLAY_BASE_VOLUMES[0] * gain;
+  if (a1) a1.volume = TERMINAL_OVERLAY_BASE_VOLUMES[1] * gain;
+
+  if (t >= 1) {
+    stopTerminalOverlaySfx();
+  }
+}
+
+function stopTerminalOverlaySfx() {
+  if (!terminalOverlaySfxReady) return;
+  terminalOverlaySfxPlaying = false;
+  terminalOverlayFadeActive = false;
+  terminalOverlayFadeTimer = 0;
+  terminalOverlayFinalFadeStarted = false;
+  terminalOverlayAudios.forEach(a => {
+    if (!a) return;
+    a.pause();
+    a.currentTime = 0;
+  });
+}
+
+const PRE_PHASE2_EXPLOSION_SFX_URLS = [
+  'assets/fight/SFX/414345__bykgames__explosion-near.wav',
+  'assets/fight/SFX/607206__fupicat__explode.wav',
+  'assets/fight/SFX/501103__evretro__8-bit-explosion.wav'
+];
+const prePhase2ExplosionSfxBases = [null, null, null];
+let prePhase2ExplosionSfxReady = false;
+let prePhase2ExplosionSfxIdx = 0;
+let prePhase2ExplosionSfxActive = [];
+
+function ensurePrePhase2ExplosionSfx() {
+  if (prePhase2ExplosionSfxReady) return;
+  for (let i = 0; i < PRE_PHASE2_EXPLOSION_SFX_URLS.length; i++) {
+    const a = new Audio(PRE_PHASE2_EXPLOSION_SFX_URLS[i]);
+    a.preload = 'auto';
+    prePhase2ExplosionSfxBases[i] = a;
+  }
+  prePhase2ExplosionSfxReady = true;
+}
+
+function sndPrePhase2ExplosionRandom() {
+  ensurePrePhase2ExplosionSfx();
+  const alive = prePhase2ExplosionSfxBases.filter(Boolean);
+  if (!alive.length) return;
+
+  prePhase2ExplosionSfxIdx = (prePhase2ExplosionSfxIdx + 1 + Math.floor(Math.random() * alive.length)) % alive.length;
+  const base = alive[prePhase2ExplosionSfxIdx];
+  if (!base) return;
+  const a = base.cloneNode(true);
+  a.volume = 0.52 + Math.random() * 0.18;
+  prePhase2ExplosionSfxActive.push(a);
+  const p = a.play();
+  if (p && typeof p.catch === 'function') p.catch(() => {});
+  a.onended = () => {
+    prePhase2ExplosionSfxActive = prePhase2ExplosionSfxActive.filter(x => x !== a);
+  };
+}
+
+function stopPrePhase2ExplosionSfx() {
+  prePhase2ExplosionSfxActive.forEach(a => {
+    if (!a) return;
+    a.pause();
+    a.currentTime = 0;
+  });
+  prePhase2ExplosionSfxActive = [];
+}
+
+const FIGHT_BGM_PHASE1_URL = 'assets/fight/SFX/alperomeresin-the-final-boss-battle-158700.mp3';
+const FIGHT_BGM_PHASE2_URL = 'assets/fight/SFX/junipersona-to-the-death-159171.mp3';
+let fightBgmPhase1Audio = null;
+let fightBgmPhase2Audio = null;
+let fightBgmActiveTrack = '';
+
+function ensureFightBgm() {
+  if (!fightBgmPhase1Audio) {
+    fightBgmPhase1Audio = new Audio(FIGHT_BGM_PHASE1_URL);
+    fightBgmPhase1Audio.preload = 'auto';
+    fightBgmPhase1Audio.loop = true;
+  }
+  if (!fightBgmPhase2Audio) {
+    fightBgmPhase2Audio = new Audio(FIGHT_BGM_PHASE2_URL);
+    fightBgmPhase2Audio.preload = 'auto';
+    fightBgmPhase2Audio.loop = true;
+  }
+}
+
+function playFightBgm(track) {
+  ensureFightBgm();
+  if (fightBgmActiveTrack === track) return;
+  stopFightBgm();
+  const a = track === 'phase2' ? fightBgmPhase2Audio : fightBgmPhase1Audio;
+  if (!a) return;
+  fightBgmActiveTrack = track;
+  a.currentTime = 0;
+  a.volume = track === 'phase2' ? 0.42 : 0.31;
+  const p = a.play();
+  if (p && typeof p.catch === 'function') {
+    p.catch(() => {
+      if (fightBgmActiveTrack === track) fightBgmActiveTrack = '';
+    });
+  }
+}
+
+function stopFightBgm() {
+  if (fightBgmPhase1Audio) {
+    fightBgmPhase1Audio.pause();
+    fightBgmPhase1Audio.currentTime = 0;
+  }
+  if (fightBgmPhase2Audio) {
+    fightBgmPhase2Audio.pause();
+    fightBgmPhase2Audio.currentTime = 0;
+  }
+  fightBgmActiveTrack = '';
+}
+
+function updateFightBgmByState() {
+  const phase1Combat = (state === 'playing' || state === 'dying' || state === 'lost') && bossPhase < 2;
+  const phase2Combat = (state === 'playing' || state === 'phase2_intro' || state === 'dying' || state === 'lost') && bossPhase >= 2;
+  if (phase2Combat) playFightBgm('phase2');
+  else if (phase1Combat) playFightBgm('phase1');
+  else stopFightBgm();
 }
 
 function sndPunch() {
@@ -3283,16 +4829,26 @@ function renderHUD(ctx) {
 
   // === PLAYER HEALTH (left → fills toward center) ===
   const pPct = player.health / player.maxHealth;
-  drawHealthBar(ctx, pBarX, BAR_Y, pBarW, BAR_H, pPct, '#00ffff', '#00ff88', 'rgba(0,255,255,0.7)', false);
+  const p1Od = isP1Berserker();
+  const pBarColorA = p1Od ? '#ff00c8' : '#00ffff';
+  const pBarColorB = p1Od ? '#ffea00' : '#00ff88';
+  const pBarGlow = p1Od ? 'rgba(255, 0, 180, 0.88)' : 'rgba(0,255,255,0.7)';
+  drawHealthBar(ctx, pBarX, BAR_Y, pBarW, BAR_H, pPct, pBarColorA, pBarColorB, pBarGlow, false);
 
   // Player label
   ctx.save();
-  ctx.font = `7px ${HUD_FONT}`;
+  ctx.font = `bold 11px ${HUD_FONT}`;
   ctx.textAlign = 'left';
-  ctx.shadowColor = '#0ff';
-  ctx.shadowBlur = 6;
-  ctx.fillStyle = '#0ff';
-  ctx.fillText('P1', pBarX + 2, BAR_Y - 7);
+  if (p1Od) {
+    ctx.shadowColor = '#ff0088';
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = '#fff6a0';
+  } else {
+    ctx.shadowColor = '#0ff';
+    ctx.shadowBlur = 14;
+    ctx.fillStyle = '#0ff';
+  }
+  ctx.fillText('PLAYER 01', pBarX + 2, BAR_Y - 7);
   ctx.shadowBlur = 0;
   ctx.restore();
 
@@ -3303,11 +4859,17 @@ function renderHUD(ctx) {
     const alive = i < p1Lives;
     ctx.save();
     if (alive) {
-      ctx.shadowColor = '#0ff';
-      ctx.shadowBlur = 6;
-      ctx.fillStyle = '#0ff';
+      if (p1Od) {
+        ctx.shadowColor = '#ffcc00';
+        ctx.shadowBlur = 8;
+        ctx.fillStyle = i % 2 ? '#ff00aa' : '#ffee55';
+      } else {
+        ctx.shadowColor = '#0ff';
+        ctx.shadowBlur = 6;
+        ctx.fillStyle = '#0ff';
+      }
     } else {
-      ctx.fillStyle = 'rgba(0,255,255,0.15)';
+      ctx.fillStyle = p1Od ? 'rgba(255,100,180,0.18)' : 'rgba(0,255,255,0.15)';
     }
     ctx.beginPath();
     const s = 4;
@@ -3329,8 +4891,8 @@ function renderHUD(ctx) {
 
   // Background
   ctx.save();
-  ctx.fillStyle = 'rgba(10,0,30,0.7)';
-  ctx.strokeStyle = 'rgba(180,120,255,0.3)';
+  ctx.fillStyle = p1Od ? 'rgba(36, 0, 22, 0.82)' : 'rgba(10,0,30,0.7)';
+  ctx.strokeStyle = p1Od ? 'rgba(255, 70, 160, 0.5)' : 'rgba(180,120,255,0.3)';
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.rect(pBarX, superY, superBarW, superBarH);
@@ -3365,7 +4927,7 @@ function renderHUD(ctx) {
   // Segment lines
   for (let i = 1; i < 4; i++) {
     const sx = pBarX + (superBarW / 4) * i;
-    ctx.strokeStyle = 'rgba(180,120,255,0.25)';
+    ctx.strokeStyle = p1Od ? 'rgba(255, 120, 200, 0.35)' : 'rgba(180,120,255,0.25)';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
     ctx.moveTo(sx, superY);
@@ -3456,43 +5018,59 @@ function renderHUD(ctx) {
   const ePct = enemy.health / enemy.maxHealth;
   drawHealthBar(ctx, eBarX, BAR_Y, eBarW, BAR_H, ePct, '#ff00ff', '#ff0044', 'rgba(255,0,255,0.7)', true);
 
-  // === BERSERKER HUD ALERT ===
+  // === P1 overdrive: aviso só em texto (pisca) ===
   if (isP1Berserker()) {
     const bPulse = 0.5 + 0.5 * Math.sin(t * 0.32);
-    const blink = Math.sin(t * 0.5) > -0.15 ? 1 : 0.45;
+    const blinkFast = 0.4 + 0.6 * Math.abs(Math.sin(t * 0.24));
+    const blinkSoft = 0.52 + 0.48 * Math.sin(t * 0.1);
+    const blink = Math.min(1, blinkFast * blinkSoft);
     const bx = W / 2;
-    const by = BAR_Y + BAR_H + 30;
+    const by = BAR_Y + BAR_H + 40;
+    const gOff = Math.sin(t * 0.41) > 0.88 ? (Math.sin(t * 2.1) * 3) : 0;
+    const gOffY = Math.sin(t * 0.37) > 0.9 ? (Math.cos(t * 1.9) * 1.6) : 0;
+    const scalePulse = 1 + 0.045 * Math.sin(t * 0.28);
 
     ctx.save();
     ctx.textAlign = 'center';
 
-    // Glitch chroma shadows
-    ctx.font = `bold 8px ${HUD_FONT}`;
-    ctx.globalAlpha = 0.32 * blink;
-    ctx.fillStyle = '#ff0066';
-    ctx.fillText('MODO BERSERKER ONLINE', bx - 1.2, by);
-    ctx.fillStyle = '#00ffff';
-    ctx.fillText('MODO BERSERKER ONLINE', bx + 1.2, by);
+    ctx.translate(bx, by);
+    ctx.scale(scalePulse, scalePulse);
+    ctx.translate(-bx, -by);
 
-    // Main neon text
-    ctx.globalAlpha = 0.86 * blink;
-    ctx.shadowColor = '#ff2bcf';
-    ctx.shadowBlur = 12 + 8 * bPulse;
-    ctx.fillStyle = `rgba(255,150,220,${0.82 + 0.18 * bPulse})`;
-    ctx.fillText('MODO BERSERKER ONLINE', bx, by);
-    ctx.shadowBlur = 0;
-    ctx.globalAlpha = 1;
+    const drawOdLine = (str, y, sizePx) => {
+      ctx.font = `bold ${sizePx}px ${HUD_FONT}`;
+      ctx.globalAlpha = 0.42 * blink;
+      ctx.fillStyle = '#ff00aa';
+      ctx.fillText(str, bx - 3 + gOff, y + gOffY);
+      ctx.fillStyle = '#ffea00';
+      ctx.fillText(str, bx + 3 + gOff, y + gOffY);
+      ctx.globalAlpha = (0.92 + 0.08 * bPulse) * blink;
+      ctx.shadowColor = '#ff0088';
+      ctx.shadowBlur = 18 + 12 * bPulse;
+      ctx.fillStyle = `rgba(255, 255, 220, ${0.92 + 0.08 * bPulse})`;
+      ctx.fillText(str, bx + gOff * 0.25, y + gOffY * 0.25);
+      ctx.shadowColor = '#00fff7';
+      ctx.shadowBlur = 10 + 8 * bPulse;
+      ctx.fillStyle = `rgba(255, 160, 220, ${0.45 + 0.4 * bPulse})`;
+      ctx.fillText(str, bx + gOff * 0.25, y + gOffY * 0.25);
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+    };
+
+    drawOdLine(BERSERKER_HUD_L1, by, 18);
+    drawOdLine(BERSERKER_HUD_L2, by + 22, 13);
+
     ctx.restore();
   }
 
   // Enemy label
   ctx.save();
-  ctx.font = `7px ${HUD_FONT}`;
+  ctx.font = `bold 11px ${HUD_FONT}`;
   ctx.textAlign = 'right';
   ctx.shadowColor = '#f0f';
-  ctx.shadowBlur = 6;
+  ctx.shadowBlur = 14;
   ctx.fillStyle = '#f0f';
-  ctx.fillText('P2', eBarX + eBarW - 2, BAR_Y - 7);
+  ctx.fillText('CIRCUIT QUEEN', eBarX + eBarW - 2, BAR_Y - 7);
   ctx.shadowBlur = 0;
   ctx.restore();
 
@@ -3627,6 +5205,8 @@ function renderHUD(ctx) {
 // =============================================================================
 
 function startGame() {
+  stopTerminalOverlaySfx();
+  stopPrePhase2ExplosionSfx();
   state = 'playing';
   battleTimer = 60;
   timerFrame = 0;
@@ -3634,15 +5214,20 @@ function startGame() {
   projectiles = [];
   energyFields = [];
   groundWaves = [];
+  cyberJumpBolts = [];
+  cyberGroundSurges = [];
   bossTraps = [];
   bossTrapTimer = 0;
   bossPowers = [];
   bossPowerTimer = 0;
   p1Lives = P1_MAX_LIVES;
   superMeter = 0;
+  p2ShieldFlashTimer = 0;
+  p2ShieldFailTimer = 0;
   p1SuperFx = null;
   prevButtonX = false;
   prevButtonB = false;
+  phase2Intro = null;
   showBossPhase2Background = false;
   bossCineFx = { flash: 0, shake: 0, glitch: 0, bars: 0 };
   bossPhase = 1;
@@ -3660,6 +5245,7 @@ function startGame() {
   aiStrafeTimer = 0;
   aiRangedTimer = 70;
   aiMeleeCommitTimer = 0;
+  aiP2DashCooldown = 0;
   aiState = 'chase';
   aiStateTimer = 0;
   aiComboCount = 0;
@@ -3689,6 +5275,9 @@ function respawnPlayer() {
   player.spriteTimer = 0;
   player.dashing = false;
   player.dashTimer = 0;
+  player.dashStrikeActive = false;
+  player.dashStrikeTimer = 0;
+  player.dashStrikeHitDone = false;
   player.afterimages = [];
   player.burstCooldown = 0;
   player.groundWaveCooldown = 0;
@@ -3705,12 +5294,15 @@ function loseLife() {
 }
 
 // =============================================================================
-// PRE PHASE 2 — Boss “implode” + explosões no canvas (sprites depois)
+// PRE PHASE 2 — Boss “implode” + explosões em sprite (enemy-explosion)
 // =============================================================================
 
 function spawnPrePhase2Sequence() {
+  loadPrePhase2ExplosionSprites();
   prePhase2Timer = 0;
   prePhase2Explosions = [];
+  prePhase2ExplosionSfxCooldown = 0;
+  stopPrePhase2ExplosionSfx();
   bossImploding = true;
   for (let i = 0; i < 16; i++) {
     prePhase2Explosions.push({
@@ -3720,9 +5312,9 @@ function spawnPrePhase2Sequence() {
       maxLife: 42 + Math.floor(Math.random() * 28),
       maxR: 50 + Math.random() * 110,
       r: 0,
-      rot: Math.random() * Math.PI * 2,
-      hue: Math.random() < 0.45 ? 'cyan' : 'magenta',
-      sparks: []
+      sizeMult:
+        PRE_PHASE2_EXPLOSION_SPRITE.sizeRandMin +
+        Math.random() * (PRE_PHASE2_EXPLOSION_SPRITE.sizeRandMax - PRE_PHASE2_EXPLOSION_SPRITE.sizeRandMin)
     });
   }
   sndPrePhase2Rumble();
@@ -3763,6 +5355,7 @@ function sndPrePhase2Pop() {
 function updatePrePhase2() {
   prePhase2Timer++;
   bgOffset++;
+  if (prePhase2ExplosionSfxCooldown > 0) prePhase2ExplosionSfxCooldown--;
 
   if (prePhase2Timer % 6 === 0) {
     prePhase2Explosions.push({
@@ -3772,10 +5365,14 @@ function updatePrePhase2() {
       maxLife: 38 + Math.floor(Math.random() * 30),
       maxR: 45 + Math.random() * 95,
       r: 0,
-      rot: Math.random() * Math.PI * 2,
-      hue: Math.random() < 0.5 ? 'cyan' : 'magenta',
-      sparks: []
+      sizeMult:
+        PRE_PHASE2_EXPLOSION_SPRITE.sizeRandMin +
+        Math.random() * (PRE_PHASE2_EXPLOSION_SPRITE.sizeRandMax - PRE_PHASE2_EXPLOSION_SPRITE.sizeRandMin)
     });
+    if (prePhase2ExplosionSfxCooldown <= 0) {
+      sndPrePhase2ExplosionRandom();
+      prePhase2ExplosionSfxCooldown = 4 + Math.floor(Math.random() * 5);
+    }
     if (prePhase2Timer % 18 === 0) sndPrePhase2Pop();
   }
 
@@ -3789,30 +5386,19 @@ function updatePrePhase2() {
       maxLife: 48 + Math.floor(Math.random() * 20),
       maxR: 70 + Math.random() * 50,
       r: 0,
-      rot: Math.random() * Math.PI * 2,
-      hue: 'both',
-      sparks: []
+      sizeMult:
+        PRE_PHASE2_EXPLOSION_SPRITE.sizeRandMin +
+        Math.random() * (PRE_PHASE2_EXPLOSION_SPRITE.sizeRandMax - PRE_PHASE2_EXPLOSION_SPRITE.sizeRandMin)
     });
+    if (prePhase2ExplosionSfxCooldown <= 0) {
+      sndPrePhase2ExplosionRandom();
+      prePhase2ExplosionSfxCooldown = 4 + Math.floor(Math.random() * 5);
+    }
   }
 
   prePhase2Explosions.forEach(e => {
     e.life++;
     e.r = Math.min(e.maxR, e.r + 5 + e.life * 0.35);
-    if (e.life % 4 === 0 && e.sparks.length < 12) {
-      for (let s = 0; s < 3; s++) {
-        e.sparks.push({
-          ang: Math.random() * Math.PI * 2,
-          dist: e.r * 0.4,
-          speed: 2 + Math.random() * 5,
-          life: 20 + Math.random() * 15
-        });
-      }
-    }
-    e.sparks.forEach(sp => {
-      sp.dist += sp.speed;
-      sp.life--;
-    });
-    e.sparks = e.sparks.filter(sp => sp.life > 0);
   });
 
   prePhase2Explosions = prePhase2Explosions.filter(e => e.life < e.maxLife + 15);
@@ -3829,134 +5415,42 @@ function updatePrePhase2() {
   if (prePhase2Timer >= PRE_PHASE2_DURATION) {
     bossImploding = false;
     prePhase2Explosions = [];
+    stopPrePhase2ExplosionSfx();
     state = 'phase_transition';
     spawnPhaseTransition();
   }
 }
 
 function renderPrePhase2Explosions(ctx) {
-  const col = (h) => {
-    if (h === 'cyan') return { c: '#00ffff', e: 'rgba(0,255,255,' };
-    if (h === 'magenta') return { c: '#ff00ff', e: 'rgba(255,0,255,' };
-    return { c: '#ffffff', e: 'rgba(255,100,200,' };
-  };
+  if (prePhase2ExplosionSprites.length === 0) return;
 
   prePhase2Explosions.forEach(e => {
     if (e.life < 0) return;
     const t = e.life / e.maxLife;
     const alpha = Math.max(0, 1 - t * 0.95);
-    const hueKey =
-      e.hue === 'both' ? (Math.floor(e.x + e.y) % 2 === 0 ? 'cyan' : 'magenta') : e.hue;
-    const { c, e: epre } = col(hueKey);
+
+    const frame = Math.min(
+      PRE_PHASE2_EXPLOSION_SPRITE.count - 1,
+      Math.floor(e.life / PRE_PHASE2_EXPLOSION_SPRITE.frameHold)
+    );
+    const sprite = prePhase2ExplosionSprites[frame];
+    if (!sprite || !sprite.complete || sprite.naturalWidth === 0) return;
+
+    const sm = typeof e.sizeMult === 'number' ? e.sizeMult : 1;
+    const sizeFromRadius = Math.max(38, e.r * 1.25);
+    const baseScale = (sizeFromRadius / Math.max(1, sprite.naturalWidth * 0.5)) * sm;
+    const scale = Math.max(
+      PRE_PHASE2_EXPLOSION_SPRITE.scaleMin,
+      Math.min(PRE_PHASE2_EXPLOSION_SPRITE.scaleMax, baseScale)
+    );
+    const dw = sprite.naturalWidth * scale;
+    const dh = sprite.naturalHeight * scale;
 
     ctx.save();
-    const g = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, e.r);
-    g.addColorStop(0, `${epre}${0.45 * alpha})`);
-    g.addColorStop(0.45, `${epre}${0.12 * alpha})`);
-    g.addColorStop(0.85, 'rgba(255,50,0,0.12)');
-    g.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = c;
-    ctx.globalAlpha = 0.5 * alpha;
-    ctx.lineWidth = 2;
-    ctx.shadowColor = c;
-    ctx.shadowBlur = 20 * alpha;
-    ctx.beginPath();
-    ctx.arc(e.x, e.y, e.r * 0.92, e.rot, e.rot + Math.PI * 1.6);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(e.x, e.y, e.r * 0.65, -e.rot, -e.rot + Math.PI * 1.2);
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-
-    // “placeholder” de sprite — cruz / fragmentos (substituir por sprites)
-    ctx.globalAlpha = 0.35 * alpha;
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 1.5;
-    for (let i = 0; i < 8; i++) {
-      const a = (Math.PI * 2 / 8) * i + e.rot;
-      ctx.beginPath();
-      ctx.moveTo(e.x + Math.cos(a) * e.r * 0.2, e.y + Math.sin(a) * e.r * 0.2);
-      ctx.lineTo(e.x + Math.cos(a) * e.r * 0.95, e.y + Math.sin(a) * e.r * 0.95);
-      ctx.stroke();
-    }
-
-    e.sparks.forEach((sp, si) => {
-      const sx = e.x + Math.cos(sp.ang) * sp.dist;
-      const sy = e.y + Math.sin(sp.ang) * sp.dist;
-      const sz = 2 + (si % 4) * 0.5;
-      const pink = 50 + (si % 6) * 18;
-      ctx.fillStyle = `rgba(255,${pink},255,${Math.min(1, sp.life / 15)})`;
-      ctx.fillRect(sx - 1, sy - 1, sz, sz);
-    });
-
+    ctx.globalAlpha = Math.min(1, 0.55 + alpha * 0.45);
+    ctx.drawImage(sprite, e.x - dw / 2, e.y - dh / 2, dw, dh);
     ctx.restore();
   });
-
-  // Piscar / glitch na tela (sincronizado com timer + bgOffset, sem Math.random)
-  const T = prePhase2Timer;
-  const B = bgOffset;
-  const strobe = (T + B) % 7;
-  const hit = strobe < 2 || T % 6 === 0 || T % 6 === 2 || (T + B) % 9 < 2;
-
-  ctx.save();
-  ctx.globalAlpha = 0.05 + (strobe % 4) * 0.015;
-  ctx.fillStyle = '#ff0044';
-  ctx.fillRect(0, 0, W, H);
-  ctx.restore();
-
-  if (hit) {
-    ctx.save();
-    const phase = (T + B) % 5;
-    let flash = 'rgba(255,255,255,';
-    if (phase === 1) flash = 'rgba(0,255,255,';
-    else if (phase === 2) flash = 'rgba(255,0,255,';
-    else if (phase === 3) flash = 'rgba(255,255,0,';
-    ctx.globalAlpha = 0.14 + (strobe % 3) * 0.08;
-    ctx.fillStyle = flash + '0.42)';
-    ctx.fillRect(0, 0, W, H);
-    ctx.restore();
-  }
-
-  if ((T + B * 2) % 5 === 0 || (T + B) % 11 === 1) {
-    ctx.save();
-    ctx.globalAlpha = 0.22;
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, W, H);
-    ctx.restore();
-  }
-
-  for (let i = 0; i < 7; i++) {
-    const y = ((T * 19 + i * 53 + B * 11) % (H - 6)) + 1;
-    const bh = 1 + ((i + T) % 5);
-    ctx.save();
-    ctx.globalAlpha = 0.2 + ((i + T) % 4) * 0.06;
-    ctx.fillStyle = (i + T + B) % 2 === 0 ? 'rgba(0,255,255,0.55)' : 'rgba(255,0,255,0.5)';
-    ctx.fillRect(0, y, W, bh);
-    ctx.restore();
-  }
-
-  const sliceY = (T * 37 + B * 3) % (H - 32);
-  ctx.save();
-  ctx.globalAlpha = 0.12;
-  ctx.fillStyle = 'rgba(255,0,255,0.4)';
-  ctx.fillRect(0, sliceY, W, 28);
-  ctx.fillStyle = 'rgba(0,255,255,0.35)';
-  ctx.fillRect(4, sliceY + 2, W - 8, 24);
-  ctx.restore();
-
-  for (let j = 0; j < 12; j++) {
-    const gy = j * 14 + ((T + B) % 7);
-    ctx.save();
-    ctx.globalAlpha = 0.04 + (j % 3) * 0.02;
-    ctx.fillStyle = j % 2 === 0 ? '#000' : 'rgba(0,255,255,0.15)';
-    ctx.fillRect(0, gy, W, 1);
-    ctx.restore();
-  }
 }
 
 // =============================================================================
@@ -3964,6 +5458,7 @@ function renderPrePhase2Explosions(ctx) {
 // =============================================================================
 
 function spawnPhaseTransition() {
+  stopPrePhase2ExplosionSfx();
   phaseTransition = {
     timer: 0,
     maxTimer: 150,
@@ -3974,8 +5469,10 @@ function spawnPhaseTransition() {
     shockwaves: [],
     hexGrid: [],
     warningText: 'DANGER',
-    phase: 'explode'
+    phase: 'explode',
+    introPrepared: false
   };
+  sndTerminalOverlaySfx();
   for (let i = 0; i < 30; i++) {
     phaseTransition.sparks.push({
       x: W / 2 + (Math.random() - 0.5) * 60,
@@ -4007,7 +5504,6 @@ function spawnPhaseTransition() {
       rotSpeed: (Math.random() - 0.5) * 0.05
     });
   }
-  sndPhaseTransition();
   // Troca o fundo já no 1º frame da transição; o flash branco do renderPhaseTransition cobre o corte
   showBossPhase2Background = !!(bgImageP2Loaded && bgImageP2 && bgImageP2.complete);
 }
@@ -4074,11 +5570,15 @@ function updatePhaseTransition() {
   // Apply phase 2 changes at midpoint
   if (t === 75) {
     activatePhase2();
+    spawnPhase2Intro();
+    phaseTransition.introPrepared = true;
   }
 
   if (t >= phaseTransition.maxTimer) {
+    stopTerminalOverlaySfx();
     phaseTransition = null;
-    state = 'playing';
+    state = 'phase2_intro';
+    sndPhase2FloatSfx();
   }
 }
 
@@ -4103,6 +5603,9 @@ function renderPhaseTransition(ctx) {
   const overlayAlpha = t < 40 ? Math.min(0.85, t / 40) : Math.max(0, 0.85 - (t - 100) / 50);
   ctx.fillStyle = `rgba(0,0,8,${overlayAlpha})`;
   ctx.fillRect(0, 0, W, H);
+
+  // Full-screen terminal layer for phase 2 boot.
+  renderPhase2BootTerminal(ctx, t);
 
   // Shockwave rings
   pt.shockwaves.forEach(s => {
@@ -4181,42 +5684,6 @@ function renderPhaseTransition(ctx) {
     ctx.restore();
   });
 
-  // Warning text
-  if (t > 30 && t < 120) {
-    const txtAlpha = Math.min(1, (t - 30) / 15) * Math.min(1, (120 - t) / 15);
-    const glitchX = Math.random() < 0.15 ? (Math.random() - 0.5) * 10 : 0;
-    const glitchY = Math.random() < 0.1 ? (Math.random() - 0.5) * 5 : 0;
-
-    ctx.save();
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    // Chromatic aberration
-    ctx.font = `bold 28px ${HUD_FONT}`;
-    ctx.globalAlpha = txtAlpha * 0.4;
-    ctx.fillStyle = '#ff0044';
-    ctx.fillText(pt.warningText, cx - 2 + glitchX, cy + glitchY);
-    ctx.fillStyle = '#00ffff';
-    ctx.fillText(pt.warningText, cx + 2 + glitchX, cy + glitchY);
-
-    // Main text
-    ctx.globalAlpha = txtAlpha;
-    ctx.shadowColor = '#ff0066';
-    ctx.shadowBlur = 20;
-    ctx.fillStyle = '#fff';
-    ctx.fillText(pt.warningText, cx + glitchX, cy + glitchY);
-    ctx.shadowBlur = 0;
-
-    // Sub text
-    if (t > 60 && t < 110) {
-      const subAlpha = Math.min(1, (t - 60) / 10) * Math.min(1, (110 - t) / 10);
-      ctx.font = `bold 10px ${HUD_FONT}`;
-      ctx.globalAlpha = subAlpha * 0.8;
-      ctx.fillStyle = '#ff0066';
-      ctx.fillText('[ POWER INCREASING ]', cx, cy + 30);
-    }
-    ctx.restore();
-  }
 
   // Scanlines over everything
   if (t < 120) {
@@ -4241,6 +5708,7 @@ function renderPhaseTransition(ctx) {
 
 function activatePhase2() {
   bossPhase = 2;
+  aiP2DashCooldown = 45;
   enemy.maxHealth = P2_HP + P2_PHASE2_HP_BONUS;
   enemy.health = enemy.maxHealth;
   enemy.w = Math.floor(50 * P2_PHASE2_SCALE);
@@ -4248,6 +5716,136 @@ function activatePhase2() {
   enemy.y = GROUND_Y - enemy.h;
   enemy.attackBox.w = Math.floor(60 * P2_PHASE2_SCALE);
   enemy.attackBox.h = Math.floor(40 * P2_PHASE2_SCALE);
+}
+
+function spawnPhase2Intro() {
+  phase2Intro = {
+    timer: 0,
+    duration: 120,
+    floatAmp: 9,
+    glowPulse: 0,
+    hpFillStart: 6,
+    hpFillDuration: 68
+  };
+  if (enemy) {
+    enemy.vx = 0;
+    enemy.vy = 0;
+    enemy.attacking = false;
+    enemy.attackFrame = 0;
+    enemy.currentAnim = 'idle';
+    enemy.spriteFrame = 0;
+    enemy.spriteTimer = 0;
+    enemy.x = W / 2 - enemy.w / 2;
+    enemy.y = GROUND_Y - enemy.h - 92;
+    enemy.onGround = false;
+    enemy.health = 1;
+  }
+  if (player) {
+    player.vx = 0;
+    player.dashing = false;
+    player.dashStrikeActive = false;
+    player.x = 100;
+    player.y = GROUND_Y - player.h;
+    player.onGround = true;
+    player.currentAnim = 'idle';
+  }
+}
+
+function updatePhase2Intro() {
+  if (!phase2Intro || !enemy) return;
+  phase2Intro.timer++;
+  const t = phase2Intro.timer;
+  const floatY = GROUND_Y - enemy.h - 92 + Math.sin(t * 0.14) * phase2Intro.floatAmp;
+  phase2Intro.glowPulse = 0.5 + 0.5 * Math.sin(t * 0.2);
+
+  enemy.vx = 0;
+  enemy.vy = 0;
+  enemy.x = W / 2 - enemy.w / 2;
+  enemy.y = floatY;
+  enemy.onGround = false;
+  enemy.currentAnim = 'idle';
+
+  // Keep sprite animation alive during intro without physics update.
+  const def = getFighterSpriteDef(enemy);
+  const idle = def?.animations?.idle;
+  if (idle) {
+    enemy.spriteTimer++;
+    if (enemy.spriteTimer >= idle.speed) {
+      enemy.spriteTimer = 0;
+      enemy.spriteFrame = (enemy.spriteFrame + 1) % idle.count;
+    }
+  }
+  if (player) {
+    const pDef = getFighterSpriteDef(player);
+    const pIdle = pDef?.animations?.idle;
+    player.vx = 0;
+    if (pIdle) {
+      player.spriteTimer++;
+      if (player.spriteTimer >= pIdle.speed) {
+        player.spriteTimer = 0;
+        player.spriteFrame = (player.spriteFrame + 1) % pIdle.count;
+      }
+    }
+  }
+
+  // Boss rebirth: refill HP bar during intro.
+  const fillT = (t - phase2Intro.hpFillStart) / phase2Intro.hpFillDuration;
+  const fillPct = Math.max(0, Math.min(1, fillT));
+  enemy.health = Math.max(1, Math.floor(enemy.maxHealth * fillPct));
+
+  if (t >= phase2Intro.duration) {
+    enemy.health = enemy.maxHealth;
+    enemy.y = GROUND_Y - enemy.h - 120;
+    enemy.vy = 0;
+    enemy.onGround = false;
+    phase2Intro = null;
+    state = 'playing';
+  }
+}
+
+function renderPhase2IntroFX(ctx) {
+  if (!phase2Intro || !enemy) return;
+  const t = phase2Intro.timer;
+  const ex = enemy.x + enemy.w / 2;
+  const ey = enemy.y + enemy.h * 0.5;
+  const pulse = phase2Intro.glowPulse || (0.5 + 0.5 * Math.sin(t * 0.2));
+
+  ctx.save();
+  // Aura bloom
+  const aura = ctx.createRadialGradient(ex, ey, 8, ex, ey, 120);
+  aura.addColorStop(0, `rgba(255,120,250,${0.35 + 0.18 * pulse})`);
+  aura.addColorStop(0.5, `rgba(0,230,255,${0.18 + 0.14 * pulse})`);
+  aura.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = aura;
+  ctx.beginPath();
+  ctx.arc(ex, ey, 130, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Floating rings
+  ctx.strokeStyle = `rgba(145,255,255,${0.24 + 0.2 * pulse})`;
+  ctx.lineWidth = 1.6;
+  ctx.shadowColor = '#4cf7ff';
+  ctx.shadowBlur = 12;
+  for (let i = 0; i < 3; i++) {
+    const r = 34 + ((t * 2.2 + i * 24) % 70);
+    ctx.beginPath();
+    ctx.arc(ex, ey, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Stronger interference after overlay ends (intro stage)
+  if (Math.sin(t * 0.33) > 0.45) {
+    ctx.globalAlpha = 0.12 + Math.random() * 0.12;
+    ctx.fillStyle = Math.random() > 0.5 ? '#ff57d4' : '#4ff7ff';
+    ctx.fillRect(0, 0, W, H);
+  }
+  if (Math.sin(t * 0.27) > 0.62) {
+    const gy = (t * 7.5) % H;
+    ctx.globalAlpha = 0.16;
+    ctx.fillStyle = Math.random() > 0.5 ? '#00eaff' : '#ff4dd7';
+    ctx.fillRect(0, gy, W, 2);
+  }
+  ctx.restore();
 }
 
 function sndPhaseTransition() {
@@ -4306,20 +5904,27 @@ function checkWinCondition() {
       return true;
     }
 
-    // Phase 2: wait for enemy death animation to finish before victory screen.
-    const eDef = SPRITE_DEFS[enemy.charName];
+    // Phase 2: vitória só após último frame da morte + corpo no chão (vy parado).
+    const eDef = getFighterSpriteDef(enemy);
     const deadAnim = eDef?.animations?.dead;
     if (deadAnim) {
-      enemy.vx = 0;
       enemy.attacking = false;
       enemy.attackFrame = 0;
-      const deadDone = enemy.currentAnim === 'dead' && enemy.spriteFrame >= deadAnim.count - 1;
-      if (!deadDone) return false;
+      const deadFramesDone =
+        enemy.currentAnim === 'dead' && enemy.spriteFrame >= deadAnim.count - 1;
+      const feetY = enemy.y + enemy.h;
+      const grounded =
+        enemy.onGround &&
+        feetY >= GROUND_Y - 3 &&
+        Math.abs(enemy.vy) < 0.35;
+      if (!deadFramesDone || !grounded) return false;
     }
 
+    enemy.vx = 0;
+    enemy.vy = 0;
     state = 'won';
-    spawnVictoryFX();
-    sndVictory();
+    victoryTimer = 0;
+    sndTerminalOverlaySfx();
     return true;
   }
   
@@ -4331,7 +5936,8 @@ function checkWinCondition() {
   if (battleTimer <= 0) {
     if (player.health >= enemy.health) {
       state = 'won';
-      sndVictory();
+      victoryTimer = 0;
+      sndTerminalOverlaySfx();
     } else {
       loseLife();
     }
@@ -4357,6 +5963,13 @@ function handleInput() {
 
   const input = _inputRef;
   const bPressed = !!input.buttonB;
+  const upPressed = !!(input.up || input.buttonA);
+  let consumedCyberJump = false;
+
+  if (upPressed) {
+    // Pequena janela para executar o combo sem frame perfeito.
+    player.cyberJumpInputBuffer = 24;
+  }
 
   const bxPressed = !!input.buttonX;
   if (bxPressed && !prevButtonX && superMeter >= SUPER_MAX) {
@@ -4369,8 +5982,12 @@ function handleInput() {
 
   if (!player.dashing) {
     player.vx = 0;
-    if (input.left) player.vx = -PLAYER_SPEED;
-    if (input.right) player.vx = PLAYER_SPEED;
+    if (input.down && player.onGround) {
+      player.triggerAnim('crouch');
+    } else {
+      if (input.left) player.vx = -PLAYER_SPEED;
+      if (input.right) player.vx = PLAYER_SPEED;
+    }
   }
   
   // Combo detection: back, back, punch → special
@@ -4393,12 +6010,22 @@ function handleInput() {
   }
   player.prevFwdPressed = fwdPressed;
   
-  if (input.up || input.buttonA) {
+  if (bPressed && (upPressed || player.cyberJumpInputBuffer > 0)) {
+    consumedCyberJump = player.fireCyberJumpTrail();
+  }
+
+  if (upPressed && !consumedCyberJump) {
     player.jump();
   }
   
   if (bPressed && !prevButtonB) {
-    if (input.down) {
+    if (consumedCyberJump) {
+      // combo ja executado (↑ + soco): salto eletrico com rastro.
+    } else if (player.startDashStrike()) {
+      // two forward already triggered dash; action converts it to damaging cyber dash.
+      player.fwdBuffer = [];
+    } else if (input.down) {
+      player.triggerAnim('crouch');
       player.fireGroundWave();
     } else if (player.checkCombo(gameFrameCount)) {
       player.fireSpecial();
@@ -4432,7 +6059,8 @@ const luta = {
     state = 'idle';
     
     loadAllSprites();
-    
+    ensureIdleLogoLoaded();
+
     player = new Fighter(150, 300, 'Brawler-Girl', true);
     enemy = new Fighter(450, 300, 'Enemy-Punk', false);
     
@@ -4441,9 +6069,14 @@ const luta = {
   },
   
   update(dt) {
+    updateTerminalOverlaySfxFade();
+    updateFightBgmByState();
     updateBossCinematic();
+    if (p2ShieldFlashTimer > 0) p2ShieldFlashTimer--;
+    if (p2ShieldFailTimer > 0) p2ShieldFailTimer--;
 
     if (state === 'idle') {
+      bgOffset++;
       // Advance sprite animation for idle display
       if (player) {
         player.vx = 0;
@@ -4476,7 +6109,7 @@ const luta = {
     if (state === 'playing') {
       if (p1SuperFx) {
         updateP1Super();
-        if (player) { player.vx = 0; player.dashing = false; }
+        if (player) { player.vx = 0; player.dashing = false; player.dashStrikeActive = false; }
         if (enemy) enemy.vx = 0;
         player.update(dt);
         enemy.update(dt);
@@ -4509,14 +6142,40 @@ const luta = {
       
       updateEnemyAI(dt);
       
-      if (checkHit(player, enemy)) {
+      if (checkHit(player, enemy) && !enemyBossDashIntangible()) {
         enemy.takeHit(scaleP1Damage(P1_ATTACK_DAMAGE));
         superMeter = Math.min(SUPER_MAX, superMeter + 8);
+      }
+      if (player.dashStrikeActive && !player.dashStrikeHitDone) {
+        const pBox = { x: player.x + 8, y: player.y + 10, w: player.w - 16, h: player.h - 14 };
+        const eBox = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
+        if (checkCollision(pBox, eBox) && !enemyBossDashIntangible()) {
+          enemy.takeHit(scaleP1Damage(DASH_STRIKE_DAMAGE));
+          enemy.vx = (player.facingRight ? 1 : -1) * 7;
+          player.dashStrikeHitDone = true;
+          player.dashStrikeActive = false;
+          player.dashing = false;
+          superMeter = Math.min(SUPER_MAX, superMeter + 14);
+        }
       }
       if (checkHit(enemy, player)) {
         const dmg = bossPhase >= 2 ? P2_PHASE2_DAMAGE : P2_ATTACK_DAMAGE;
         player.takeHit(dmg);
         superMeter = Math.min(SUPER_MAX, superMeter + 5);
+      }
+      if (
+        bossPhase >= 2 &&
+        enemy.dashing &&
+        !enemy.dashStrikeActive &&
+        !enemy.bossDashHitDone
+      ) {
+        const eBox = { x: enemy.x + 8, y: enemy.y + 10, w: enemy.w - 16, h: enemy.h - 16 };
+        const pBox = { x: player.x + 8, y: player.y + 10, w: player.w - 16, h: player.h - 16 };
+        if (checkCollision(eBox, pBox)) {
+          player.takeHit(P2_BOSS_DASH_DAMAGE);
+          enemy.bossDashHitDone = true;
+          player.vx = enemy.dashDir * 6;
+        }
       }
 
       projectiles.forEach(p => {
@@ -4525,7 +6184,18 @@ const luta = {
         if (p.exploding) return;
         const target = p.owner === player ? enemy : player;
         const pBox = p.getBox();
+        if (p.owner === player && target === enemy && p2ShieldBlocksHit(pBox, p)) {
+          p.alive = false;
+          return;
+        }
         const tBox = { x: target.x, y: target.y, w: target.w, h: target.h };
+        if (
+          p.owner === player &&
+          target === enemy &&
+          enemyBossDashIntangible()
+        ) {
+          return;
+        }
         if (checkCollision(pBox, tBox)) {
           const projDmg = p.owner === enemy ? P2_RANGED_DAMAGE : scaleP1Damage(P1_SPECIAL_DAMAGE);
           target.takeHit(projDmg);
@@ -4542,16 +6212,31 @@ const luta = {
 
       energyFields.forEach(ef => ef.update());
       energyFields = energyFields.filter(ef => ef.alive);
+      updateP1CyberJumpBolts();
+      cyberGroundSurges.forEach(cs => cs.update());
+      cyberGroundSurges.forEach(cs => {
+        if (!cs.alive || cs.hitDone || !enemy || enemy.health <= 0) return;
+        const sBox = cs.getBox();
+        const eBox = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
+        if (checkCollision(sBox, eBox) && !enemyBossDashIntangible()) {
+          enemy.takeHit(scaleP1Damage(CYBER_GROUND_SURGE_DAMAGE));
+          cs.hitDone = true;
+          superMeter = Math.min(SUPER_MAX, superMeter + 9);
+        }
+      });
+      cyberGroundSurges = cyberGroundSurges.filter(cs => cs.alive);
       projectiles = projectiles.filter(p => p.alive);
       groundWaves.forEach(gw => gw.update());
       groundWaves.forEach(gw => {
-        if (!gw.alive || gw.hitDone || !enemy) return;
+        if (!gw.alive || gw.hitDone || !enemy || enemy.health <= 0) return;
         const gBox = gw.getBox();
         const eBox = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
         if (checkCollision(gBox, eBox)) {
-          enemy.takeHit(scaleP1Damage(GROUND_WAVE_DAMAGE));
-          gw.hitDone = true;
-          superMeter = Math.min(SUPER_MAX, superMeter + 10);
+          if (!enemyBossDashIntangible()) {
+            enemy.takeHit(scaleP1Damage(GROUND_WAVE_DAMAGE));
+            gw.hitDone = true;
+            superMeter = Math.min(SUPER_MAX, superMeter + 10);
+          }
         }
       });
       groundWaves = groundWaves.filter(gw => gw.alive);
@@ -4591,6 +6276,12 @@ const luta = {
       return;
     }
 
+    if (state === 'phase2_intro') {
+      bgOffset++;
+      updatePhase2Intro();
+      return;
+    }
+
     if (state === 'dying') {
       bgOffset++;
       updateDeathExplosion();
@@ -4609,19 +6300,13 @@ const luta = {
     if (state === 'won') {
       bgOffset++;
       victoryTimer++;
-      if (player) {
-        const pDef = SPRITE_DEFS[player.charName].animations.idle;
-        player.spriteTimer++;
-        if (player.spriteTimer >= pDef.speed) {
-          player.spriteTimer = 0;
-          player.spriteFrame = (player.spriteFrame + 1) % pDef.count;
-        }
+      if (player) player.vx = 0;
+      if (enemy) enemy.vx = 0;
+      // Deixa o som do terminal tocar durante a animação e só depois faz fade.
+      if (!terminalOverlayFinalFadeStarted && victoryTimer >= (VICTORY_CORPSE_PAUSE_FRAMES + 170)) {
+        terminalOverlayFinalFadeStarted = true;
+        startTerminalOverlayFadeOut(0, 42);
       }
-      victoryParticles.forEach(p => {
-        p.x += p.vx;
-        p.y += p.vy;
-        if (p.y < -10) { p.y = H + 10; p.x = Math.random() * W; }
-      });
     }
     
     if (state === 'lost') {
@@ -4648,13 +6333,27 @@ const luta = {
       return;
     }
     
+    const preP2Shake = state === 'pre_phase2';
+    const overclockShake = !!(p1SuperFx && state === 'playing');
+    const bzkShake = berserkerScreenFxActive() && state !== 'phase_transition';
+    const worldShake = bzkShake || preP2Shake || overclockShake;
+    if (worldShake) {
+      const shB = bzkShake ? getBerserkerScreenShake() : { x: 0, y: 0 };
+      const shP = preP2Shake ? getPrePhase2ScreenShake() : { x: 0, y: 0 };
+      const shO = overclockShake ? getOverclockScreenShake() : { x: 0, y: 0 };
+      renderCtx.save();
+      renderCtx.translate(Math.round(shB.x + shP.x + shO.x), Math.round(shB.y + shP.y + shO.y));
+    }
+
     renderBackground(renderCtx);
-    
+
     // Render boss traps (below fighters)
     bossTraps.forEach(bt => bt.render(renderCtx));
 
     // Render fighters
     if (enemy) enemy.render(renderCtx);
+    renderBossPhase2ShieldPassive(renderCtx);
+    renderP2Shield(renderCtx);
     if (player) player.render(renderCtx);
 
     // Render stun effect on player
@@ -4695,14 +6394,25 @@ const luta = {
     if (state === 'pre_phase2') {
       renderPrePhase2Explosions(renderCtx);
     }
+    if (state === 'phase2_intro') {
+      renderPhase2IntroFX(renderCtx);
+    }
     
     // Render projectiles and boss powers
     projectiles.forEach(p => p.render(renderCtx));
     groundWaves.forEach(gw => gw.render(renderCtx));
     energyFields.forEach(ef => ef.render(renderCtx));
+    renderP1CyberJumpBolts(renderCtx);
+    cyberGroundSurges.forEach(cs => cs.render(renderCtx));
     bossPowers.forEach(bp => bp.render(renderCtx));
     renderBossCinematic(renderCtx);
-    
+
+    if (worldShake) {
+      renderCtx.restore();
+      if (bzkShake) renderBerserkerScreenGlitch(renderCtx);
+      if (preP2Shake) renderPrePhase2ScreenGlitch(renderCtx);
+    }
+
     // Phase transition overlay
     if (state === 'phase_transition') {
       renderPhaseTransition(renderCtx);
@@ -4710,7 +6420,7 @@ const luta = {
     }
 
     // Render HUD
-    if (state === 'playing' || state === 'pre_phase2' || state === 'dying') {
+    if (state === 'playing' || state === 'pre_phase2' || state === 'phase2_intro' || state === 'dying') {
       renderHUD(renderCtx);
     }
 
@@ -4720,6 +6430,12 @@ const luta = {
     
     // Dying explosion
     if (state === 'dying' && deathExplosion) {
+      const bzkDie = isP1Berserker();
+      if (bzkDie) {
+        const sh = getBerserkerScreenShake();
+        renderCtx.save();
+        renderCtx.translate(Math.round(sh.x * 0.35), Math.round(sh.y * 0.35));
+      }
       if (deathExplosion.timer < 6) {
         renderCtx.save();
         renderCtx.globalAlpha = 1 - deathExplosion.timer / 6;
@@ -4735,160 +6451,15 @@ const luta = {
           renderCtx.fillRect(0, y, W, 1);
         }
       }
+      if (bzkDie) {
+        renderCtx.restore();
+        renderBerserkerScreenGlitch(renderCtx);
+      }
     }
     
-    // Victory screen — Cyberpunk
+    // Victory terminal screen — full-screen cyberpunk debrief.
     if (state === 'won') {
-      const vt = victoryTimer;
-      const fadeIn = Math.min(1, vt / 30);
-      const cx = W / 2;
-      const cy = H / 2;
-
-      // Dark overlay with fade
-      renderCtx.fillStyle = `rgba(0, 0, 10, ${0.75 * fadeIn})`;
-      renderCtx.fillRect(0, 0, W, H);
-
-      // Flash at start
-      if (vt < 8) {
-        renderCtx.save();
-        renderCtx.globalAlpha = 1 - vt / 8;
-        renderCtx.fillStyle = '#0ff';
-        renderCtx.fillRect(0, 0, W, H);
-        renderCtx.restore();
-      }
-
-      // Floating particles
-      victoryParticles.forEach(p => {
-        const tw = 0.4 + 0.4 * Math.sin(vt * 0.06 + p.twinkle);
-        renderCtx.save();
-        renderCtx.globalAlpha = tw * fadeIn;
-        renderCtx.shadowColor = p.color;
-        renderCtx.shadowBlur = 6;
-        renderCtx.fillStyle = p.color;
-        renderCtx.fillRect(p.x, p.y, p.size, p.size);
-        renderCtx.restore();
-      });
-
-      // Horizontal glitch bars
-      if (fadeIn >= 1) {
-        renderCtx.save();
-        for (let i = 0; i < 4; i++) {
-          if (Math.sin(vt * 0.15 + i * 2) > 0.85) {
-            const gy = Math.random() * H;
-            const gh = 1 + Math.random() * 3;
-            renderCtx.globalAlpha = 0.08 + Math.random() * 0.06;
-            renderCtx.fillStyle = Math.random() > 0.5 ? '#0ff' : '#f0f';
-            renderCtx.fillRect(0, gy, W, gh);
-          }
-        }
-        renderCtx.restore();
-      }
-
-      // Neon frame around center
-      const frameW = 340;
-      const frameH = 120;
-      const fx = cx - frameW / 2;
-      const fy = cy - frameH / 2 - 10;
-      const framePulse = 0.6 + 0.4 * Math.sin(vt * 0.06);
-
-      renderCtx.save();
-      renderCtx.globalAlpha = fadeIn;
-      renderCtx.strokeStyle = `rgba(0,255,255,${0.3 * framePulse})`;
-      renderCtx.shadowColor = '#0ff';
-      renderCtx.shadowBlur = 12 * framePulse;
-      renderCtx.lineWidth = 1.5;
-      renderCtx.strokeRect(fx, fy, frameW, frameH);
-      renderCtx.shadowBlur = 0;
-
-      // Corner accents
-      const cLen = 14;
-      renderCtx.lineWidth = 2;
-      renderCtx.strokeStyle = '#0ff';
-      renderCtx.globalAlpha = fadeIn * 0.8;
-      renderCtx.beginPath(); renderCtx.moveTo(fx, fy + cLen); renderCtx.lineTo(fx, fy); renderCtx.lineTo(fx + cLen, fy); renderCtx.stroke();
-      renderCtx.beginPath(); renderCtx.moveTo(fx + frameW - cLen, fy); renderCtx.lineTo(fx + frameW, fy); renderCtx.lineTo(fx + frameW, fy + cLen); renderCtx.stroke();
-      renderCtx.strokeStyle = '#f0f';
-      renderCtx.beginPath(); renderCtx.moveTo(fx, fy + frameH - cLen); renderCtx.lineTo(fx, fy + frameH); renderCtx.lineTo(fx + cLen, fy + frameH); renderCtx.stroke();
-      renderCtx.beginPath(); renderCtx.moveTo(fx + frameW - cLen, fy + frameH); renderCtx.lineTo(fx + frameW, fy + frameH); renderCtx.lineTo(fx + frameW, fy + frameH - cLen); renderCtx.stroke();
-      renderCtx.restore();
-
-      // Main text — "VICTORY"
-      if (fadeIn >= 0.5) {
-        const textAlpha = Math.min(1, (fadeIn - 0.5) * 2);
-        const glitchX = Math.sin(vt * 0.25) > 0.92 ? (Math.random() - 0.5) * 8 : 0;
-        const glitchY = Math.sin(vt * 0.35) > 0.95 ? (Math.random() - 0.5) * 4 : 0;
-
-        renderCtx.save();
-        renderCtx.textAlign = 'center';
-        renderCtx.font = 'bold 56px monospace';
-
-        // Chromatic aberration
-        renderCtx.globalAlpha = textAlpha * 0.2;
-        renderCtx.fillStyle = '#ff0000';
-        renderCtx.fillText('VICTORY', cx - 2.5 + glitchX, cy - 8 + glitchY);
-        renderCtx.fillStyle = '#0000ff';
-        renderCtx.fillText('VICTORY', cx + 2.5 + glitchX, cy - 8 + glitchY);
-
-        // Main glow text
-        renderCtx.globalAlpha = textAlpha;
-        renderCtx.shadowColor = '#0ff';
-        renderCtx.shadowBlur = 25 * framePulse;
-        renderCtx.fillStyle = '#0ff';
-        renderCtx.fillText('VICTORY', cx + glitchX, cy - 8 + glitchY);
-        renderCtx.shadowBlur = 0;
-
-        // White overlay for shine
-        renderCtx.globalAlpha = textAlpha * 0.35;
-        renderCtx.fillStyle = '#fff';
-        renderCtx.fillText('VICTORY', cx + glitchX, cy - 8 + glitchY);
-        renderCtx.restore();
-      }
-
-      // Sub label — decorative line + text
-      if (fadeIn >= 0.8) {
-        const subAlpha = Math.min(1, (fadeIn - 0.8) * 5);
-
-        renderCtx.save();
-        renderCtx.globalAlpha = subAlpha * 0.4;
-        renderCtx.strokeStyle = '#f0f';
-        renderCtx.shadowColor = '#f0f';
-        renderCtx.shadowBlur = 6;
-        renderCtx.lineWidth = 1;
-        renderCtx.beginPath();
-        renderCtx.moveTo(cx - 100, cy + 20);
-        renderCtx.lineTo(cx + 100, cy + 20);
-        renderCtx.stroke();
-        renderCtx.shadowBlur = 0;
-        renderCtx.restore();
-
-        renderCtx.save();
-        renderCtx.textAlign = 'center';
-        renderCtx.font = '10px monospace';
-        renderCtx.fillStyle = '#f0f';
-        renderCtx.globalAlpha = subAlpha * (0.4 + 0.3 * Math.sin(vt * 0.04));
-        renderCtx.fillText('[ ENEMY TERMINATED ]', cx, cy + 34);
-        renderCtx.restore();
-      }
-
-      // "Press any button" blink
-      if (vt > 60) {
-        renderCtx.save();
-        renderCtx.textAlign = 'center';
-        renderCtx.font = '12px monospace';
-        renderCtx.fillStyle = '#fff';
-        renderCtx.globalAlpha = 0.4 + 0.4 * Math.sin(vt * 0.06);
-        renderCtx.fillText('Press any button to continue', cx, cy + 55);
-        renderCtx.textAlign = 'left';
-        renderCtx.restore();
-      }
-
-      // Scanlines
-      renderCtx.save();
-      renderCtx.fillStyle = 'rgba(0,0,0,0.05)';
-      for (let y = 0; y < H; y += 3) {
-        renderCtx.fillRect(0, y, W, 1);
-      }
-      renderCtx.restore();
+      renderBossDefeatTerminal(renderCtx);
     }
     
     // Game Over screen
@@ -4956,86 +6527,29 @@ const luta = {
   
   renderIdle(renderCtx) {
     renderBackground(renderCtx);
+    renderCtx.fillStyle = 'rgba(4, 2, 12, 0.32)';
+    renderCtx.fillRect(0, 0, W, H);
 
-    const t = bgOffset;
-    const pulse = 0.55 + 0.45 * Math.sin(t * 0.07);
-    const cx = W / 2;
-    const panelY = H / 2 - 102;
-    const panelH = 184;
-
-    renderCtx.save();
-
-    // Cinematic dark panel
-    const panelGrad = renderCtx.createLinearGradient(0, panelY, 0, panelY + panelH);
-    panelGrad.addColorStop(0, 'rgba(6, 4, 22, 0.8)');
-    panelGrad.addColorStop(0.5, 'rgba(12, 8, 30, 0.86)');
-    panelGrad.addColorStop(1, 'rgba(3, 2, 14, 0.82)');
-    renderCtx.fillStyle = panelGrad;
-    renderCtx.fillRect(0, panelY, W, panelH);
-
-    // Neon frame
-    renderCtx.strokeStyle = `rgba(0,255,255,${0.25 + 0.2 * pulse})`;
-    renderCtx.lineWidth = 1.6;
-    renderCtx.shadowColor = '#00ffff';
-    renderCtx.shadowBlur = 12 * pulse;
-    renderCtx.strokeRect(14, panelY + 14, W - 28, panelH - 28);
-    renderCtx.shadowBlur = 0;
-    renderCtx.strokeStyle = `rgba(255,0,200,${0.2 + 0.16 * pulse})`;
-    renderCtx.lineWidth = 1;
-    renderCtx.strokeRect(20, panelY + 20, W - 40, panelH - 40);
-
-    // Occasional glitch bars
-    for (let i = 0; i < 3; i++) {
-      if (Math.sin(t * 0.19 + i * 1.7) > 0.78) {
-        const gy = panelY + 26 + ((t * (1.8 + i * 0.25) + i * 29) % (panelH - 52));
-        renderCtx.globalAlpha = 0.12 + i * 0.03;
-        renderCtx.fillStyle = i % 2 ? '#ff00b7' : '#00ffff';
-        renderCtx.fillRect(22, gy, W - 44, 2 + (i % 2));
-      }
+    const img = ensureIdleLogoLoaded();
+    if (img.complete && img.naturalWidth > 0) {
+      const maxW = W * 0.9;
+      const maxH = H * 0.78;
+      let iw = img.naturalWidth;
+      let ih = img.naturalHeight;
+      const scale = Math.min(maxW / iw, maxH / ih);
+      iw *= scale;
+      ih *= scale;
+      const x = (W - iw) / 2;
+      const y = (H - ih) / 2;
+      renderCtx.imageSmoothingEnabled = true;
+      renderCtx.drawImage(img, x, y, iw, ih);
+    } else {
+      renderCtx.textAlign = 'center';
+      renderCtx.font = '12px monospace';
+      renderCtx.fillStyle = 'rgba(180, 180, 200, 0.45)';
+      renderCtx.fillText('…', W / 2, H / 2);
+      renderCtx.textAlign = 'left';
     }
-    renderCtx.globalAlpha = 1;
-
-    // Subtitle
-    renderCtx.textAlign = 'center';
-    renderCtx.font = '10px monospace';
-    renderCtx.fillStyle = `rgba(170,255,255,${0.7 + 0.25 * pulse})`;
-    renderCtx.fillText('CYBERPUNK ARENA PROTOCOL v2.0', cx, panelY + 34);
-
-    // Main title with chromatic glitch
-    const glitchX = Math.sin(t * 0.22) > 0.9 ? (Math.random() - 0.5) * 6 : 0;
-    const glitchY = Math.sin(t * 0.28) > 0.94 ? (Math.random() - 0.5) * 3 : 0;
-    renderCtx.font = 'bold 58px monospace';
-    renderCtx.globalAlpha = 0.24;
-    renderCtx.fillStyle = '#ff0048';
-    renderCtx.fillText('GLITCH FIGHTERS', cx - 2 + glitchX, panelY + 94 + glitchY);
-    renderCtx.fillStyle = '#003bff';
-    renderCtx.fillText('GLITCH FIGHTERS', cx + 2 + glitchX, panelY + 94 + glitchY);
-
-    renderCtx.globalAlpha = 1;
-    renderCtx.shadowColor = '#00ffff';
-    renderCtx.shadowBlur = 22 * pulse;
-    renderCtx.fillStyle = `rgba(170,255,255,${0.86 + 0.14 * pulse})`;
-    renderCtx.fillText('GLITCH FIGHTERS', cx + glitchX, panelY + 94 + glitchY);
-    renderCtx.shadowBlur = 0;
-
-    renderCtx.globalAlpha = 0.35;
-    renderCtx.fillStyle = '#ffffff';
-    renderCtx.fillText('GLITCH FIGHTERS', cx + glitchX, panelY + 94 + glitchY);
-    renderCtx.globalAlpha = 1;
-
-    // Flavor text
-    renderCtx.font = '12px monospace';
-    renderCtx.fillStyle = `rgba(255,140,240,${0.65 + 0.25 * Math.sin(t * 0.09)})`;
-    renderCtx.fillText('BRAWL. BREAK. BECOME DATA.', cx, panelY + 122);
-
-    // Start prompt
-    const promptA = 0.42 + 0.5 * Math.sin(t * 0.11);
-    renderCtx.font = '15px monospace';
-    renderCtx.fillStyle = `rgba(255,255,255,${promptA})`;
-    renderCtx.fillText('Press any button to enter the arena', cx, panelY + 154);
-
-    renderCtx.restore();
-    renderCtx.textAlign = 'left';
   },
   
   getState() {
@@ -5043,12 +6557,16 @@ const luta = {
   },
   
   reset() {
+    stopTerminalOverlaySfx();
+    stopPrePhase2ExplosionSfx();
     state = 'playing';
     battleTimer = 60;
     timerFrame = 0;
     gameFrameCount = 0;
     projectiles = [];
     energyFields = [];
+    cyberJumpBolts = [];
+    cyberGroundSurges = [];
     bossTraps = [];
     bossTrapTimer = 0;
     bossPowers = [];
@@ -5068,8 +6586,10 @@ const luta = {
   },
   
   destroy() {
-    _canvas = null;
-    _inputRef = null;
+    stopTerminalOverlaySfx();
+    stopPrePhase2ExplosionSfx();
+    stopFightBgm();
+    // Keep canvas/input refs for totem orchestrator flow (destroy -> reset).
     player = null;
     enemy = null;
     state = 'idle';

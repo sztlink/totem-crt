@@ -3,6 +3,7 @@
 // ES Module, 640×480, sem dependências externas
 
 import { getState as rushInputRef } from '../input.js';
+import { applyRetroFilter, RETRO_FILTER_PRESETS } from './retro-filter.js';
 
 const W = 640;
 const H = 480;
@@ -195,9 +196,22 @@ const OFF_TRACK_RESPAWN_X = 2.82;
 /** Distância ao fim onde começa interferência CRT (ligada ao trigger da explosão, um pouco antes). */
 const PRE_EXPLOSION_INTERFERENCE_START = SEGMENT_LENGTH * 318;
 const TRACK_RESPAWN_GLITCH_SEC = 0.58;
+/** Tráfego agressivo: parte dos rivais tenta fechar a linha do P1. */
+const ENEMY_AGGRESSIVE_CHANCE = 0.55;
+const ENEMY_AGGRESSIVE_STEER = 0.58;
+const ENEMY_AGGRESSIVE_HARD_CHANCE = 0.3;
+const ENEMY_AGGRESSIVE_HARD_STEER = 1.25;
+const ENEMY_AGGRESSIVE_Z_MIN = -SEGMENT_LENGTH * 0.08;
+const ENEMY_AGGRESSIVE_Z_MAX = SEGMENT_LENGTH * 1.25;
+const ENEMY_AGGRESSIVE_HARD_Z_MIN = -SEGMENT_LENGTH * 0.12;
+const ENEMY_AGGRESSIVE_HARD_Z_MAX = SEGMENT_LENGTH * 1.35;
+const ENEMY_OFFSET_LIMIT = 0.94;
+/** Filtro visual para teste (look 16-bits): pixelização + textura + shift de cor. */
+const ENABLE_16BIT_FILTER = true;
+const FILTER_16BIT_PRESET = RETRO_FILTER_PRESETS.soft16;
 let portalFinaleT = 0;
 let finalChallengeT = 0;
-const ENEMY_CAR_COUNT = 23;
+const ENEMY_CAR_COUNT = 32;
 let enemyCars = [];
 let enemyHitFxTimer = 0;
 let enemyCollisionCooldown = 0;
@@ -244,7 +258,9 @@ function resetEnemyCars() {
     const lane = laneOffsets[i % laneOffsets.length];
     const jitter = ((Math.sin(i * 37.17) + 1) * 0.5 - 0.5) * 0.18;
     const z = ((i + 1) / (ENEMY_CAR_COUNT + 1)) * trackLength;
-    const speedMul = 0.28 + ((Math.sin(i * 11.13) + 1) * 0.5) * 0.4;
+    const speedMul = 0.32 + ((Math.sin(i * 11.13) + 1) * 0.5) * 0.46;
+    const aggressive = Math.random() < ENEMY_AGGRESSIVE_CHANCE;
+    const aggressiveHard = aggressive && Math.random() < ENEMY_AGGRESSIVE_HARD_CHANCE;
     enemyCars.push({
       z,
       offset: lane + jitter,
@@ -252,6 +268,8 @@ function resetEnemyCars() {
       colorA: i % 2 === 0 ? '#22d3ee' : '#f472b6',
       colorB: i % 2 === 0 ? '#67e8f9' : '#f9a8d4',
       spriteKind: i % 2 === 0 ? 'blue' : 'truck',
+      aggressive,
+      aggressiveHard,
     });
   }
 }
@@ -772,8 +790,8 @@ function buildPalmPlacement() {
     const leftRoll = rndStar(i * 0.127 + 0.37);
     const rightRoll = rndStar(i * 0.149 + 0.79);
     palmPlacements[i] = {
-      left: leftRoll > 0.93,
-      right: rightRoll > 0.94,
+      left: leftRoll > 0.84,
+      right: rightRoll > 0.85,
       leftVar: Math.floor(leftRoll * 10000),
       rightVar: Math.floor(rightRoll * 10000) + 3,
     };
@@ -925,6 +943,16 @@ function updateGame(dtSec) {
     let dz = enemy.z - playerWorldZ;
     while (dz > trackLength / 2) dz -= trackLength;
     while (dz < -trackLength / 2) dz += trackLength;
+    const aggressiveZMin = enemy.aggressiveHard ? ENEMY_AGGRESSIVE_HARD_Z_MIN : ENEMY_AGGRESSIVE_Z_MIN;
+    const aggressiveZMax = enemy.aggressiveHard ? ENEMY_AGGRESSIVE_HARD_Z_MAX : ENEMY_AGGRESSIVE_Z_MAX;
+    const aggressiveSteer = enemy.aggressiveHard ? ENEMY_AGGRESSIVE_HARD_STEER : ENEMY_AGGRESSIVE_STEER;
+    if (enemy.aggressive && dz > aggressiveZMin && dz < aggressiveZMax) {
+      const drift = playerX - enemy.offset;
+      if (Math.abs(drift) > 0.015) {
+        enemy.offset += Math.sign(drift) * aggressiveSteer * dtSec;
+        enemy.offset = Util.limit(enemy.offset, -ENEMY_OFFSET_LIMIT, ENEMY_OFFSET_LIMIT);
+      }
+    }
     // Janela de colisão mais ampla para garantir contato em todos os carros visíveis
     const nearZ = dz > -SEGMENT_LENGTH * 0.14 && dz < SEGMENT_LENGTH * 0.62;
     if (!nearZ) continue;
@@ -1364,6 +1392,13 @@ function renderTrackSnapGlitch(ctx) {
   ctx.fillRect(0, H * 0.95, W, H * 0.05);
   ctx.restore();
 }
+
+/** Pós-processo simples para look 16-bits. */
+function renderRetro16BitFilter(ctx) {
+  if (!ENABLE_16BIT_FILTER || !_canvas) return;
+  applyRetroFilter(ctx, _canvas, W, H, performance.now(), FILTER_16BIT_PRESET);
+}
+
 
 /** Interferência CRT em ecrã inteiro antes da explosão (cresce ao aproximar do fim). */
 function renderPreFinaleInterference(ctx) {
@@ -1818,7 +1853,9 @@ function drawPalmTreeOnSegment(ctx, segment, side, variant) {
   const scale = baseScale;
   const treeH = ih * scale * 0.22;
   const treeW = iw * scale * 0.22;
-  const margin = 10 + rand * 26;
+  // Espalha mais no eixo X: algumas mais perto da pista, outras bem abertas nas laterais.
+  const spreadRoll = rndStar(variant * 0.311 + segment.index * 0.071 + (side < 0 ? 3.7 : 4.9));
+  const margin = 4 + rand * 18 + spreadRoll * 56;
   const x = side < 0 ? roadX - roadW - treeW - margin : roadX + roadW + margin;
   const y = segment.p1.screen.y - treeH + 3;
   if (y > H + 30 || y < -treeH - 30) return;
@@ -2093,7 +2130,7 @@ function renderPortalFinaleOverlay(ctx) {
     const eased = 1 - Math.pow(1 - loadT, 2.35);
     const ly = H * 0.34;
     const panelW = Math.min(W * 0.5, 300);
-    const panelH = 86;
+    const panelH = 96;
     const px = cx - panelW * 0.5;
     const py = ly - 28;
 
@@ -2105,21 +2142,21 @@ function renderPortalFinaleOverlay(ctx) {
     ctx.fill();
     ctx.stroke();
 
-    ctx.font = `800 16px ${HUD_CYBER_FONT}`;
+    ctx.font = `800 24px ${HUD_CYBER_FONT}`;
     ctx.shadowColor = 'rgba(168, 85, 247, 0.85)';
     ctx.shadowBlur = 16;
     ctx.fillStyle = '#f5f3ff';
-    ctx.fillText(TELEPORT_ACTIVATING_LABEL, cx, ly);
+    ctx.fillText(TELEPORT_ACTIVATING_LABEL, cx, ly + 2);
     ctx.shadowBlur = 0;
 
-    ctx.font = `600 8px ${HUD_CYBER_FONT}`;
+    ctx.font = `600 9px ${HUD_CYBER_FONT}`;
     ctx.fillStyle = `rgba(186, 230, 253, ${0.65 + 0.25 * Math.sin(t * 9)})`;
-    ctx.fillText('// LOCK ON COORDENADAS //', cx, ly + 16);
+    ctx.fillText('// LOCK ON COORDENADAS //', cx, ly + 22);
 
     const bw = panelW - 48;
     const bh = 7;
     const bx = cx - bw * 0.5;
-    const by = ly + 30;
+    const by = ly + 38;
     ctx.strokeStyle = 'rgba(103, 232, 249, 0.55)';
     ctx.lineWidth = 1.25;
     ctx.strokeRect(bx, by, bw, bh);
@@ -2639,11 +2676,13 @@ const corrida = {
       this.renderIdle(renderCtx);
     } else {
       renderGame(renderCtx);
+      renderRetro16BitFilter(renderCtx);
     }
   },
 
   renderIdle(renderCtx) {
     renderIdleScreen(renderCtx);
+    renderRetro16BitFilter(renderCtx);
   },
 
   getState() {

@@ -125,6 +125,9 @@ function sndWin(){
 }
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let canvas=null,ctx=null;
+/** Logo da tela inicial (attract / idle). Ficheiro: app/assets/cyberrun/idle-logo.png */
+const IDLE_LOGO_IMG=new Image();
+IDLE_LOGO_IMG.src=new URL('../../assets/cyberrun/idle-logo.png',import.meta.url).href+'?v=1';
 let _inputRef=null;
 /** Se não for null, `drawNow()` devolve este valor (attract Cyber Run totalmente estático). */
 let _cyberrunFrozenDrawTime=null;
@@ -261,12 +264,16 @@ function makeLevelData(){return{
     {x:3674,y:GROUND-23,vy:0,vx:0,w:22,h:22,dir:1,type:'jumper',alive:true,anim:0,jumpTimer:28},
     {x:4006,y:GROUND-23,vy:0,vx:-1.5,w:22,h:22,dir:-1,type:'walker',alive:true,anim:0},
     {x:797,y:GROUND-51,vy:0.375,vx:-0.75,w:24,h:19,dir:-1,type:'flyer',alive:true,anim:0,baseY:GROUND-51,ampY:12},
-    {x:1328,y:GROUND-131,vy:0.438,vx:-0.812,w:24,h:19,dir:-1,type:'flyer',alive:true,anim:0,baseY:GROUND-131,ampY:24},
+    {x:1328,y:GROUND-131,vy:0.438,vx:0.812,w:24,h:19,dir:1,type:'flyer',alive:true,anim:0,baseY:GROUND-131,ampY:24},
     {x:1948,y:GROUND-76,vy:0.5,vx:-0.875,w:24,h:19,dir:-1,type:'flyer',alive:true,anim:0,baseY:GROUND-76,ampY:17},
     {x:2568,y:GROUND-42,vy:0.375,vx:-0.75,w:24,h:19,dir:-1,type:'flyer',alive:true,anim:0,baseY:GROUND-42,ampY:10},
-    {x:3099,y:GROUND-148,vy:0.562,vx:-1,w:24,h:19,dir:-1,type:'flyer',alive:true,anim:0,baseY:GROUND-148,ampY:26},
+    {x:3099,y:GROUND-148,vy:0.562,vx:1,w:24,h:19,dir:1,type:'flyer',alive:true,anim:0,baseY:GROUND-148,ampY:26},
     {x:3630,y:GROUND-68,vy:0.438,vx:-0.812,w:24,h:19,dir:-1,type:'flyer',alive:true,anim:0,baseY:GROUND-68,ampY:15},
     {x:3984,y:GROUND-110,vy:0.5,vx:-0.875,w:24,h:19,dir:-1,type:'flyer',alive:true,anim:0,baseY:GROUND-110,ampY:21},
+    {x:1058,y:GROUND-92,vy:0.406,vx:0.78,w:24,h:19,dir:1,type:'flyer',alive:true,anim:0,baseY:GROUND-92,ampY:14},
+    {x:1682,y:GROUND-156,vy:0.594,vx:-1.03,w:24,h:19,dir:-1,type:'flyer',alive:true,anim:0,baseY:GROUND-156,ampY:28},
+    {x:2846,y:GROUND-58,vy:0.375,vx:-0.74,w:24,h:19,dir:-1,type:'flyer',alive:true,anim:0,baseY:GROUND-58,ampY:11},
+    {x:3368,y:GROUND-132,vy:0.531,vx:0.94,w:24,h:19,dir:1,type:'flyer',alive:true,anim:0,baseY:GROUND-132,ampY:23},
   ],
   FLAG_X:4031,
 };}
@@ -1453,6 +1460,69 @@ function drawCanvasHUD(c){
   c.restore();
 }
 
+function drawIdleLogoCentered(c){
+  if(!IDLE_LOGO_IMG.complete||!IDLE_LOGO_IMG.naturalWidth)return H*0.42;
+  const iw=IDLE_LOGO_IMG.naturalWidth;
+  const ih=IDLE_LOGO_IMG.naturalHeight;
+  const maxW=W*0.92;
+  const maxH=H*0.68;
+  let dw=maxW;
+  let dh=(ih/iw)*dw;
+  if(dh>maxH){
+    dh=maxH;
+    dw=(iw/ih)*dh;
+  }
+  const cx=W/2;
+  const cy=H*0.36;
+  c.save();
+  c.shadowColor='rgba(34,211,238,0.5)';
+  c.shadowBlur=26;
+  c.drawImage(IDLE_LOGO_IMG,0,0,iw,ih,cx-dw/2,cy-dh/2,dw,dh);
+  c.restore();
+  return cy+dh/2;
+}
+
+/** Texto de início na idle: pisca + glitch leve (estilo cyberpunk). */
+function drawIdleStartPromptCyber(c, yBelowLogo){
+  const t=performance.now()*0.001;
+  const blink=0.38+0.62*Math.pow(0.5+0.5*Math.sin(t*4.6),2);
+  const gx=(Math.sin(t*11.3)*2.2)|0;
+  const gy=(Math.cos(t*9.1)*1.4)|0;
+  const line='APERTE QUALQUER BOTÃO PARA INICIAR';
+  const y0=yBelowLogo+28;
+  c.save();
+  c.textAlign='center';
+  c.textBaseline='top';
+  c.font=`700 12px ${CYBER_HUD_FONT}`;
+  const x=W/2;
+  c.globalCompositeOperation='screen';
+  c.globalAlpha=0.42*blink;
+  c.fillStyle='#22d3ee';
+  c.fillText(line,x+gx+1,y0+gy);
+  c.fillStyle='#f472b6';
+  c.fillText(line,x-gx-1,y0-gy);
+  c.globalCompositeOperation='source-over';
+  c.globalAlpha=blink;
+  c.shadowColor='rgba(34,211,238,0.65)';
+  c.shadowBlur=12+7*blink;
+  c.fillStyle='#f8fafc';
+  c.fillText(line,x,y0);
+  c.shadowBlur=0;
+  c.globalAlpha=0.35+0.35*blink;
+  c.strokeStyle='rgba(148,163,184,0.55)';
+  c.lineWidth=1;
+  c.setLineDash([4,4]);
+  const w=W*0.72;
+  const ruleY=y0+22;
+  c.beginPath();
+  c.moveTo(x-w*0.5,ruleY);
+  c.lineTo(x+w*0.5,ruleY);
+  c.stroke();
+  c.setLineDash([]);
+  c.globalAlpha=1;
+  c.restore();
+}
+
 function drawMenuIdle(c){
   ensureLevelMaskLoaded();
   ensureCenarioLoaded();
@@ -1483,48 +1553,12 @@ function drawMenuIdle(c){
 
   simDraw();
 
-  const t=drawNow();
   c.save();
   c.setTransform(1,0,0,1,0,0);
-  c.fillStyle='rgba(0,0,0,0.82)';
+  c.fillStyle='rgba(0,0,0,0.56)';
   c.fillRect(0,0,W,H);
-
-  c.textAlign='center';
-  const titleY=238,titleX=320;
-  const titleStr='CYBER RUN';
-  c.font='40px "Press Start 2P",monospace';
-  const gPulse=0.88+0.12*Math.sin(t*0.0038);
-  c.save();
-  c.lineJoin='round';
-  c.shadowColor='#ff1493';
-  c.shadowBlur=46*gPulse;
-  c.fillStyle='#ffe8f4';
-  c.fillText(titleStr,titleX,titleY);
-  c.shadowColor='#e91e8c';
-  c.shadowBlur=22*gPulse;
-  c.fillStyle='#fff5fb';
-  c.fillText(titleStr,titleX,titleY);
-  c.shadowColor='#ff66cc';
-  c.shadowBlur=10*gPulse;
-  c.fillStyle='#ffffff';
-  c.fillText(titleStr,titleX,titleY);
-  c.shadowBlur=0;
-  c.lineWidth=3;
-  c.strokeStyle='rgba(255,0,150,0.75)';
-  c.strokeText(titleStr,titleX,titleY);
-  c.lineWidth=1.2;
-  c.strokeStyle='rgba(255,200,240,0.95)';
-  c.strokeText(titleStr,titleX,titleY);
-  c.fillStyle='#fffafc';
-  c.fillText(titleStr,titleX,titleY);
-  c.restore();
-  const pressPulse=0.5+0.5*Math.sin(t*0.006);
-  c.globalAlpha=0.5+0.5*pressPulse;
-  c.shadowColor='#0ff';c.shadowBlur=6+14*pressPulse;
-  c.fillStyle='#9ef';c.font='12px "Press Start 2P",monospace';
-  c.fillText('PRESS START',320,titleY+72);
-  c.shadowBlur=0;c.globalAlpha=1;
-  c.textAlign='left';
+  const logoBottom=drawIdleLogoCentered(c);
+  drawIdleStartPromptCyber(c,logoBottom);
   c.restore();
 
   _cyberrunFrozenDrawTime=null;

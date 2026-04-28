@@ -365,7 +365,7 @@ function renderRanking(ctx) {
   ctx.fillStyle = '#0ff';
   ctx.font = fsTV(10);
   ctx.textAlign = 'center';
-  ctx.fillText('RANKING DO DIA', CX, yTV(80));
+  ctx.fillText('JOGO LUTA', CX, yTV(80));
   renderRankingList(ctx, yTV(120));
   ctx.textAlign = 'left';
 }
@@ -375,16 +375,12 @@ function renderRankingList(ctx, startY) {
   ctx.textAlign = 'center';
   const lineGap = (22 * TV_H) / 480;
   const sub = (30 * TV_H) / 480;
-  if (ranking.length === 0) {
-    ctx.fillStyle = '#444';
-    ctx.fillText('SEM RECORDES AINDA', CX, startY + sub);
-  } else {
-    ranking.slice(0, 10).forEach((entry, i) => {
-      const color = i === 0 ? '#ff0' : i < 3 ? '#0ff' : '#aaa';
-      ctx.fillStyle = color;
-      ctx.fillText(`${(i + 1).toString().padStart(2)}. ${entry.name} — ${entry.time.toFixed(1)}s`, CX, startY + i * lineGap);
-    });
-  }
+  const gameNames = ['CYBERRUN', 'NAVE', 'CORRIDA', 'LUTA'];
+  gameNames.forEach((name, i) => {
+    const color = i === 3 ? '#ff0' : i < 2 ? '#0ff' : '#aaa';
+    ctx.fillStyle = color;
+    ctx.fillText(`${(i + 1).toString().padStart(2)}. ${name}`, CX, startY + sub + i * lineGap);
+  });
   ctx.textAlign = 'left';
 }
 
