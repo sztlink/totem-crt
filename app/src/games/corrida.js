@@ -7,6 +7,9 @@ import { applyRetroFilter, RETRO_FILTER_PRESETS } from './retro-filter.js';
 
 const W = 640;
 const H = 480;
+const IDLE_LOGO_RACE_SRC = '/assets/LOGOS/logo_race.png';
+const idleLogoRace = new Image();
+idleLogoRace.src = IDLE_LOGO_RACE_SRC;
 const CAMERA_HEIGHT = 1000;
 const FOV = 80; // degrees
 const CAMERA_DEPTH = 1 / Math.tan((FOV / 2) * Math.PI / 180);
@@ -2681,7 +2684,31 @@ const corrida = {
   },
 
   renderIdle(renderCtx) {
-    renderIdleScreen(renderCtx);
+    const ctx = renderCtx;
+    const t = performance.now() * 0.001;
+    const pulse = 0.55 + 0.45 * Math.sin(t * 2.2);
+    const cx = W * 0.5;
+
+    // Mantém o jogo ao fundo com overlay transparente.
+    renderGame(ctx);
+    ctx.fillStyle = 'rgba(0,0,0,0.64)';
+    ctx.fillRect(0, 0, W, H);
+
+    if (idleLogoRace.complete && idleLogoRace.naturalWidth > 0) {
+      const maxW = W * 1.08;
+      const maxH = H * 0.86;
+      const scale = Math.min(maxW / idleLogoRace.naturalWidth, maxH / idleLogoRace.naturalHeight);
+      const lw = idleLogoRace.naturalWidth * scale;
+      const lh = idleLogoRace.naturalHeight * scale;
+      ctx.drawImage(idleLogoRace, cx - lw * 0.5, H * 0.04, lw, lh);
+    }
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(186, 230, 253, ${0.48 + 0.52 * pulse})`;
+    ctx.font = `700 11px ${HUD_CYBER_FONT}`;
+    ctx.fillText('PRESS START', cx, H * 0.86);
+    ctx.textAlign = 'left';
+
     renderRetro16BitFilter(renderCtx);
   },
 

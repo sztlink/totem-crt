@@ -47,12 +47,21 @@ const P2_NEON_SECONDARY = '#9a3dff'; // roxo neon
 
 const IDLE_LOGO_SRC = 'assets/fight/logo_luta.png';
 let idleLogoImage = null;
+const IDLE_LOGO_FIGHT_SRC = '/assets/LOGOS/logo_fight.png';
+let idleFightLogoImage = null;
 function ensureIdleLogoLoaded() {
   if (!idleLogoImage) {
     idleLogoImage = new Image();
     idleLogoImage.src = IDLE_LOGO_SRC;
   }
   return idleLogoImage;
+}
+function ensureIdleFightLogoLoaded() {
+  if (!idleFightLogoImage) {
+    idleFightLogoImage = new Image();
+    idleFightLogoImage.src = IDLE_LOGO_FIGHT_SRC;
+  }
+  return idleFightLogoImage;
 }
 
 // Estado global do jogo
@@ -6526,30 +6535,28 @@ const luta = {
   },
   
   renderIdle(renderCtx) {
+    const t = performance.now() * 0.001;
+    const pulse = 0.55 + 0.45 * Math.sin(t * 2.2);
+    const cx = W * 0.5;
     renderBackground(renderCtx);
-    renderCtx.fillStyle = 'rgba(4, 2, 12, 0.32)';
+    renderCtx.fillStyle = 'rgba(0,0,0,0.64)';
     renderCtx.fillRect(0, 0, W, H);
 
-    const img = ensureIdleLogoLoaded();
-    if (img.complete && img.naturalWidth > 0) {
-      const maxW = W * 0.9;
-      const maxH = H * 0.78;
-      let iw = img.naturalWidth;
-      let ih = img.naturalHeight;
-      const scale = Math.min(maxW / iw, maxH / ih);
-      iw *= scale;
-      ih *= scale;
-      const x = (W - iw) / 2;
-      const y = (H - ih) / 2;
-      renderCtx.imageSmoothingEnabled = true;
-      renderCtx.drawImage(img, x, y, iw, ih);
-    } else {
-      renderCtx.textAlign = 'center';
-      renderCtx.font = '12px monospace';
-      renderCtx.fillStyle = 'rgba(180, 180, 200, 0.45)';
-      renderCtx.fillText('…', W / 2, H / 2);
-      renderCtx.textAlign = 'left';
+    const logo = ensureIdleFightLogoLoaded();
+    if (logo.complete && logo.naturalWidth > 0) {
+      const maxW = W * 1.08;
+      const maxH = H * 0.86;
+      const scale = Math.min(maxW / logo.naturalWidth, maxH / logo.naturalHeight);
+      const lw = logo.naturalWidth * scale;
+      const lh = logo.naturalHeight * scale;
+      renderCtx.drawImage(logo, cx - lw * 0.5, H * 0.04, lw, lh);
     }
+
+    renderCtx.textAlign = 'center';
+    renderCtx.fillStyle = `rgba(186,230,253,${0.48 + 0.52 * pulse})`;
+    renderCtx.font = '700 11px "Press Start 2P",monospace';
+    renderCtx.fillText('PRESS START', cx, H * 0.86);
+    renderCtx.textAlign = 'left';
   },
   
   getState() {

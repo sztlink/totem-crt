@@ -7,6 +7,9 @@
 
 import { PW_SPEED_IMG, PW_SHIELD_IMG, PW_STAR_IMG, PW_SPREAD_IMG, PW_LIFE_IMG } from './nave-powerup-sprites.js';
 import { applyRetroFilter, RETRO_FILTER_PRESETS } from './retro-filter.js';
+const IDLE_LOGO_SHOOT_SRC='/assets/LOGOS/logo_shoot.png';
+const idleLogoShoot=new Image();
+idleLogoShoot.src=IDLE_LOGO_SHOOT_SRC;
 
 // ─── ÁUDIO ───────────────────────────────────────────────────
 let _ac = null;
@@ -2080,73 +2083,31 @@ const nave = {
 
   renderIdle(renderCtx) {
     const ctx=renderCtx;
-    _frame++;
-    const t=performance.now();
-    drawBgLayers(ctx);
-    _stars.forEach(s=>{
-      s.y+=s.v;if(s.y>H){s.y=0;s.x=rnd(0,W);}
-    });
-    drawStarsForeground(ctx);
+    const t=performance.now()*0.001;
+    const pulse=0.55+0.45*Math.sin(t*2.2);
+    const cx=W*0.5;
 
-    const cx=W/2, titleY=165;
-    const titleStr='STELLARIX';
-    const gPulse=0.88+0.12*Math.sin(t*0.0038);
+    drawBG(ctx);
+    drawAsteroids(ctx);
+    drawParticles(ctx);
+    ctx.fillStyle='rgba(0,0,0,0.64)';
+    ctx.fillRect(0,0,W,H);
 
-    ctx.save();
-    ctx.textAlign='center';
-    ctx.lineJoin='round';
-    ctx.font='36px "Press Start 2P",monospace';
-
-    ctx.shadowColor='#6600ff';
-    ctx.shadowBlur=48*gPulse;
-    ctx.fillStyle='#e0ccff';
-    ctx.fillText(titleStr,cx,titleY);
-
-    ctx.shadowColor='#aa44ff';
-    ctx.shadowBlur=22*gPulse;
-    ctx.fillStyle='#f0e8ff';
-    ctx.fillText(titleStr,cx,titleY);
-
-    ctx.shadowColor='#cc88ff';
-    ctx.shadowBlur=10*gPulse;
-    ctx.fillStyle='#ffffff';
-    ctx.fillText(titleStr,cx,titleY);
-
-    ctx.shadowBlur=0;
-    ctx.lineWidth=3;
-    ctx.strokeStyle='rgba(100,0,220,0.75)';
-    ctx.strokeText(titleStr,cx,titleY);
-    ctx.lineWidth=1.2;
-    ctx.strokeStyle='rgba(200,160,255,0.9)';
-    ctx.strokeText(titleStr,cx,titleY);
-    ctx.fillStyle='#fffaff';
-    ctx.fillText(titleStr,cx,titleY);
-
-    ctx.font='8px "Press Start 2P",monospace';
-    ctx.shadowBlur=0;
-    ctx.fillStyle='rgba(180,200,255,0.55)';
-    ctx.fillText('SPACE SHOOTER',cx,titleY+28);
-
-    const shipSpr=_playerShipImg;
-    const shipY=titleY+50;
-    const shipBob=Math.sin(t*0.002)*6;
-    if(shipSpr&&shipSpr.complete&&shipSpr.naturalWidth>0){
-      ctx.shadowColor='#6600ff';ctx.shadowBlur=18+10*gPulse;
-      ctx.drawImage(shipSpr,cx-PLAYER_W/2,shipY+shipBob,PLAYER_W,PLAYER_H);
-      ctx.shadowBlur=0;
+    if(idleLogoShoot.complete&&idleLogoShoot.naturalWidth>0){
+      const maxW=W*1.08;
+      const maxH=H*0.86;
+      const scale=Math.min(maxW/idleLogoShoot.naturalWidth,maxH/idleLogoShoot.naturalHeight);
+      const lw=idleLogoShoot.naturalWidth*scale;
+      const lh=idleLogoShoot.naturalHeight*scale;
+      ctx.drawImage(idleLogoShoot,cx-lw*0.5,H*0.04,lw,lh);
     }
-    ctx.fillStyle='#f80';ctx.globalAlpha=0.6+0.4*Math.sin(t*0.005);
-    ctx.fillRect(cx-4,shipY+shipBob+PLAYER_H,8,6+Math.sin(t*0.006)*4);
-    ctx.globalAlpha=1;
 
-    const pressPulse=0.5+0.5*Math.sin(t*0.006);
-    ctx.globalAlpha=0.5+0.5*pressPulse;
-    ctx.shadowColor='#aa66ff';ctx.shadowBlur=6+14*pressPulse;
-    ctx.fillStyle='#ccbbff';ctx.font='12px "Press Start 2P",monospace';
-    ctx.fillText('PRESS START',cx,titleY+180);
-    ctx.shadowBlur=0;ctx.globalAlpha=1;
+    ctx.textAlign='center';
+    ctx.fillStyle=`rgba(186,230,253,${0.48+0.52*pulse})`;
+    ctx.font='700 11px "Press Start 2P",monospace';
+    ctx.fillText('PRESS START',cx,H*0.86);
     ctx.textAlign='left';
-    ctx.restore();
+
     renderRetro16BitFilter(ctx);
   },
 

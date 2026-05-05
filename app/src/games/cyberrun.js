@@ -135,6 +135,9 @@ let _cyberrunFrozenDrawTime=null;
 let _cyberrunAttractSceneryOnly=false;
 function drawNow(){return _cyberrunFrozenDrawTime!=null?_cyberrunFrozenDrawTime:performance.now();}
 const W=640,H=480,GROUND=338,GRAVITY=0.475,PSPEED=3.625,JUMP_VEL=-8.25,LEVEL_LEN=4250;
+const IDLE_LOGO_RUN_SRC=new URL('../../../assets/LOGOS/logo_run.png',import.meta.url).href+'?v=2';
+const idleLogoRun=new Image();
+idleLogoRun.src=IDLE_LOGO_RUN_SRC;
 /** Só desenho: nave um pouco à direita da bandeira; `drawShip` limita ao fim do mapa (LEVEL_LEN). */
 const SHIP_END_WORLD_X_OFFSET=56;
 /** Empurra a nave para baixo até as patas colarem ao chão (PNG costuma ter margem em baixo). */
@@ -1553,14 +1556,6 @@ function drawMenuIdle(c){
 
   simDraw();
 
-  c.save();
-  c.setTransform(1,0,0,1,0,0);
-  c.fillStyle='rgba(0,0,0,0.56)';
-  c.fillRect(0,0,W,H);
-  const logoBottom=drawIdleLogoCentered(c);
-  drawIdleStartPromptCyber(c,logoBottom);
-  c.restore();
-
   _cyberrunFrozenDrawTime=null;
   _cyberrunAttractSceneryOnly=false;
 
@@ -1622,7 +1617,27 @@ const cyberrunGame={
   },
 
   renderIdle(c){
+    const t=performance.now()*0.001;
+    const pulse=0.55+0.45*Math.sin(t*2.2);
+    const cx=W*0.5;
     drawMenuIdle(c);
+    c.fillStyle='rgba(0,0,0,0.64)';
+    c.fillRect(0,0,W,H);
+
+    if(idleLogoRun.complete&&idleLogoRun.naturalWidth>0){
+      const maxW=W*1.08;
+      const maxH=H*0.86;
+      const scale=Math.min(maxW/idleLogoRun.naturalWidth,maxH/idleLogoRun.naturalHeight);
+      const lw=idleLogoRun.naturalWidth*scale;
+      const lh=idleLogoRun.naturalHeight*scale;
+      c.drawImage(idleLogoRun,cx-lw*0.5,H*0.04,lw,lh);
+    }
+
+    c.textAlign='center';
+    c.fillStyle=`rgba(186,230,253,${0.48+0.52*pulse})`;
+    c.font='700 11px "Press Start 2P",monospace';
+    c.fillText('PRESS START',cx,H*0.86);
+    c.textAlign='left';
   },
 
   reset(){
